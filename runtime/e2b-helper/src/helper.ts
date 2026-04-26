@@ -126,6 +126,7 @@ async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, en
         apiKey: requiredEnv("E2B_API_KEY"),
         requestTimeoutMs: 60_000,
       });
+      await sandbox.setTimeout(envelope.sandboxTimeoutMs || 3_600_000, { requestTimeoutMs: 60_000 });
       return { sandbox, created: false };
     } catch {
       return createSandbox(input, envelope, envs);

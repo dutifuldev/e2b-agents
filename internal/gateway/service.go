@@ -100,9 +100,6 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if err != nil {
 		return err
 	}
-	if event.Type == "message" && isBotMentionText(text, workspace.BotUserID) {
-		return nil
-	}
 	if workspace.LastSlackEventID == envelope.EventID && envelope.EventID != "" {
 		return nil
 	}

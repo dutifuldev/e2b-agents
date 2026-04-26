@@ -90,3 +90,82 @@ esac
 		t.Fatalf("runtime send count = %q, want one send", got)
 	}
 }
+
+func TestHandleSlackEnvelopeRespondsToDirectMention(t *testing.T) {
+	tmp := t.TempDir()
+	countPath := filepath.Join(tmp, "send-count")
+	scriptPath := filepath.Join(tmp, "runtime.sh")
+	script := `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+*'"command":"ensure"'*)
+  printf '{"sandboxId":"sandbox-1","templateId":"openclaw","host":"localhost","baseUrl":"http://localhost","sessionKey":"session-1"}'
+  ;;
+*'"command":"send"'*)
+  printf x >> "` + countPath + `"
+  printf '{"text":"ok","sessionKey":"session-1"}'
+  ;;
+*)
+  printf 'unknown command' >&2
+  exit 1
+  ;;
+esac
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write runtime script: %v", err)
+	}
+
+	db, err := database.Open(":memory:", database.PoolConfig{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := database.ApplyTestSchema(db); err != nil {
+		t.Fatalf("apply test schema: %v", err)
+	}
+	workspaces := NewWorkspaceService(db)
+	if _, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+		BotUserID:   "BOT",
+	}); err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+
+	service := NewService(db, Options{
+		Runtime: NewRuntimeClient(RuntimeOptions{
+			NodePath:     "/bin/sh",
+			ScriptPath:   scriptPath,
+			APIKey:       "test-e2b-key",
+			AnthropicKey: "test-anthropic-key",
+			Timeout:      time.Minute,
+		}),
+		AutoCreate:      true,
+		DefaultTeamID:   "default",
+		DefaultTemplate: "openclaw",
+	})
+
+	envelope := SlackEventEnvelope{
+		TeamID:  "T123",
+		EventID: "EvDM123",
+		Event: SlackEvent{
+			Type:        "message",
+			ChannelType: "im",
+			Channel:     "",
+			User:        "U123",
+			Text:        "<@BOT> hello",
+			TS:          "1777220000.000100",
+		},
+	}
+	if err := service.handleSlackEnvelope(context.Background(), envelope); err != nil {
+		t.Fatalf("handleSlackEnvelope() returned error: %v", err)
+	}
+
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatalf("read send count: %v", err)
+	}
+	if got := string(count); got != "x" {
+		t.Fatalf("runtime send count = %q, want one send", got)
+	}
+}
