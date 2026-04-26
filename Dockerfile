@@ -7,6 +7,7 @@ RUN npm run build
 
 FROM golang:1.26-bookworm AS go-build
 WORKDIR /src
+ENV CGO_CFLAGS="-O0"
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
