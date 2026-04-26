@@ -124,3 +124,15 @@ func TestSessionThreadRootTS(t *testing.T) {
 		t.Fatalf("sessionThreadRootTS() = %q, want thread root timestamp", got)
 	}
 }
+
+func TestThreadTS(t *testing.T) {
+	if got := threadTS(SlackEvent{Type: "message", ChannelType: "im", TS: "1777220000.000100"}); got != "" {
+		t.Fatalf("threadTS() = %q, want empty direct reply", got)
+	}
+	if got := threadTS(SlackEvent{Type: "app_mention", TS: "1777220000.000100"}); got != "1777220000.000100" {
+		t.Fatalf("threadTS() = %q, want app mention timestamp", got)
+	}
+	if got := threadTS(SlackEvent{Type: "message", ChannelType: "im", TS: "1777220000.000100", ThreadTS: "1777220000.000000"}); got != "1777220000.000000" {
+		t.Fatalf("threadTS() = %q, want existing thread timestamp", got)
+	}
+}

@@ -92,6 +92,14 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if err != nil {
 		return err
 	}
+
+	unlock := s.lockWorkspace(workspace.ID)
+	defer unlock()
+
+	workspace, err = s.workspaces.GetBySlackTeamID(ctx, workspace.SlackTeamID)
+	if err != nil {
+		return err
+	}
 	if event.Type == "message" && isBotMentionText(text, workspace.BotUserID) {
 		return nil
 	}
@@ -99,15 +107,17 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		return nil
 	}
 	if envelope.EventID != "" {
-		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
+		if err := s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"last_slack_event_id":   envelope.EventID,
 			"last_slack_channel_id": event.Channel,
 			"last_slack_message_ts": event.TS,
 			"last_error":            "",
-		})
+		}); err != nil {
+			return err
+		}
 	}
 
-	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
+	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
 	if err != nil {
 		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"setup_status": SetupStatusFailed,
@@ -176,11 +186,15 @@ func (s *Service) HandleDirectMessage(ctx context.Context, input DirectMessageIn
 }
 
 func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWorkspace, requesterUserID, channelID, text, messageTS string) (MessageReply, error) {
+	unlock := s.lockWorkspace(workspace.ID)
+	defer unlock()
+	return s.sendToRuntimeLocked(ctx, workspace, requesterUserID, channelID, text, messageTS)
+}
+
+func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.SlackWorkspace, requesterUserID, channelID, text, messageTS string) (MessageReply, error) {
 	if s.runtime == nil {
 		return MessageReply{}, errors.New("runtime client is not configured")
 	}
-	unlock := s.lockWorkspace(workspace.ID)
-	defer unlock()
 
 	latest, err := s.workspaces.GetBySlackTeamID(ctx, workspace.SlackTeamID)
 	if err != nil {
@@ -267,7 +281,10 @@ func threadTS(event SlackEvent) string {
 	if strings.TrimSpace(event.ThreadTS) != "" {
 		return event.ThreadTS
 	}
-	return event.TS
+	if event.Type == "app_mention" {
+		return event.TS
+	}
+	return ""
 }
 
 func sessionThreadRootTS(event SlackEvent) string {
