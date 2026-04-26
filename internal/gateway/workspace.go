@@ -85,6 +85,12 @@ func (s *WorkspaceService) EnsureWorkspace(ctx context.Context, input EnsureWork
 		"template_id":         input.TemplateID,
 		"updated_at":          now,
 	}
+	if workspace.TemplateID != "" && workspace.TemplateID != input.TemplateID {
+		updates["current_sandbox_id"] = ""
+		updates["current_acp_session_id"] = ""
+		updates["setup_status"] = SetupStatusReady
+		updates["last_error"] = ""
+	}
 	if err := s.db.WithContext(ctx).Model(&workspace).Updates(updates).Error; err != nil {
 		return database.SlackWorkspace{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dutifuldev/e2b-agents/internal/database"
@@ -22,6 +23,8 @@ type Service struct {
 	defaultTeamID     string
 	defaultTemplate   string
 	processingTimeout time.Duration
+	locksMu           sync.Mutex
+	workspaceLocks    map[string]*sync.Mutex
 }
 
 const slackSessionKeyVersion = "v1"
@@ -63,6 +66,7 @@ func NewService(db *gorm.DB, opts Options) *Service {
 		defaultTeamID:     opts.DefaultTeamID,
 		defaultTemplate:   opts.DefaultTemplate,
 		processingTimeout: timeout,
+		workspaceLocks:    map[string]*sync.Mutex{},
 	}
 }
 
@@ -175,6 +179,15 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 	if s.runtime == nil {
 		return MessageReply{}, errors.New("runtime client is not configured")
 	}
+	unlock := s.lockWorkspace(workspace.ID)
+	defer unlock()
+
+	latest, err := s.workspaces.GetBySlackTeamID(ctx, workspace.SlackTeamID)
+	if err != nil {
+		return MessageReply{}, err
+	}
+	workspace = latest
+
 	sessionKey := slackSessionKey(workspace.SlackTeamID, channelID, messageTS)
 	_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"setup_status": SetupStatusCreatingSandbox,
@@ -215,6 +228,19 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 		SandboxID: ensure.SandboxID,
 		SessionID: send.SessionKey,
 	}, nil
+}
+
+func (s *Service) lockWorkspace(workspaceID string) func() {
+	s.locksMu.Lock()
+	lock := s.workspaceLocks[workspaceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.workspaceLocks[workspaceID] = lock
+	}
+	s.locksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
 }
 
 func slackSessionKey(slackTeamID, channelID, threadRootTS string) string {
