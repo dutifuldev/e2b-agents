@@ -24,6 +24,8 @@ type Service struct {
 	processingTimeout time.Duration
 }
 
+const slackSessionKeyVersion = "v1"
+
 type Options struct {
 	Runtime           *RuntimeClient
 	Slack             *SlackClient
@@ -163,10 +165,7 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 	if s.runtime == nil {
 		return MessageReply{}, errors.New("runtime client is not configured")
 	}
-	sessionKey := workspace.CurrentACPSessionID
-	if sessionKey == "" {
-		sessionKey = fmt.Sprintf("slack:%s:%s", workspace.SlackTeamID, channelID)
-	}
+	sessionKey := fmt.Sprintf("slack:%s:%s:%s", slackSessionKeyVersion, workspace.SlackTeamID, channelID)
 	_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"setup_status": SetupStatusCreatingSandbox,
 		"last_error":   "",
