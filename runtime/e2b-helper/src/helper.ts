@@ -205,7 +205,7 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCre
     await sandbox.commands.run(command, { requestTimeoutMs: 60_000, envs: baseEnvs });
   }
 
-  const fingerprint = gatewayFingerprint(envelope);
+  const fingerprint = gatewayFingerprint(envelope, baseEnvs);
   const readyBeforeStart = await isGatewayReady(sandbox, envelope, baseEnvs);
   const currentFingerprint = await readGatewayFingerprint(sandbox, baseEnvs);
   if (readyBeforeStart && currentFingerprint === fingerprint) return;
@@ -241,13 +241,14 @@ async function readGatewayFingerprint(sandbox: Sandbox, envs: Record<string, str
   return output.stdout.trim();
 }
 
-function gatewayFingerprint(envelope: Envelope) {
+function gatewayFingerprint(envelope: Envelope, envs: Record<string, string>) {
   return createHash("sha256")
     .update(JSON.stringify({
       model: envelope.model,
       gatewayPort: envelope.gatewayPort,
       gatewayToken: envelope.gatewayToken,
-      version: 1,
+      anthropicKeyHash: createHash("sha256").update(envs.ANTHROPIC_API_KEY ?? "").digest("hex"),
+      version: 2,
     }))
     .digest("hex");
 }
