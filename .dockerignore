@@ -1,0 +1,6 @@
+.git
+.env
+node_modules
+runtime/e2b-helper/dist
+tmp_*
+*.db
