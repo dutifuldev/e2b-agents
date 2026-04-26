@@ -55,6 +55,14 @@ func TestSlackTokenFromRef(t *testing.T) {
 	if got != "xoxb-test" {
 		t.Fatalf("SlackTokenFromRef() = %q, want xoxb-test", got)
 	}
+
+	got, err = SlackTokenFromRef("literal:xoxb-oauth")
+	if err != nil {
+		t.Fatalf("SlackTokenFromRef() literal returned error: %v", err)
+	}
+	if got != "xoxb-oauth" {
+		t.Fatalf("SlackTokenFromRef() literal = %q, want xoxb-oauth", got)
+	}
 }
 
 func TestIsBotMentionText(t *testing.T) {

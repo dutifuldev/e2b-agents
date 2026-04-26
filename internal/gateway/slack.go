@@ -42,15 +42,21 @@ func SlackTokenFromRef(ref string) (string, error) {
 	if ref == "" {
 		return "", errors.New("slack bot token reference is empty")
 	}
-	name, ok := strings.CutPrefix(ref, "env:")
-	if !ok {
-		return "", fmt.Errorf("unsupported slack token reference: %s", ref)
+	if token, ok := strings.CutPrefix(ref, "literal:"); ok {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			return "", errors.New("slack literal token reference is empty")
+		}
+		return token, nil
 	}
-	token := strings.TrimSpace(os.Getenv(name))
-	if token == "" {
-		return "", fmt.Errorf("%s is not set", name)
+	if name, ok := strings.CutPrefix(ref, "env:"); ok {
+		token := strings.TrimSpace(os.Getenv(name))
+		if token == "" {
+			return "", fmt.Errorf("%s is not set", name)
+		}
+		return token, nil
 	}
-	return token, nil
+	return "", fmt.Errorf("unsupported slack token reference: %s", ref)
 }
 
 func VerifySlackSignature(signingSecret string, headers http.Header, body []byte, now time.Time) error {
@@ -95,6 +101,69 @@ func (c *SlackClient) AuthTest(ctx context.Context) (SlackAuthInfo, error) {
 		return SlackAuthInfo{}, fmt.Errorf("slack auth.test failed: %s", response.Error)
 	}
 	return response.SlackAuthInfo, nil
+}
+
+type SlackOAuthAccess struct {
+	AccessToken  string
+	BotUserID    string
+	TeamID       string
+	TeamName     string
+	EnterpriseID string
+}
+
+func ExchangeSlackOAuthCode(ctx context.Context, clientID, clientSecret, redirectURL, code string) (SlackOAuthAccess, error) {
+	values := url.Values{}
+	values.Set("client_id", strings.TrimSpace(clientID))
+	values.Set("client_secret", strings.TrimSpace(clientSecret))
+	values.Set("code", strings.TrimSpace(code))
+	if strings.TrimSpace(redirectURL) != "" {
+		values.Set("redirect_uri", strings.TrimSpace(redirectURL))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/oauth.v2.access", strings.NewReader(values.Encode()))
+	if err != nil {
+		return SlackOAuthAccess{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return SlackOAuthAccess{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return SlackOAuthAccess{}, fmt.Errorf("slack oauth.v2.access returned HTTP %d", resp.StatusCode)
+	}
+
+	var response struct {
+		OK          bool   `json:"ok"`
+		Error       string `json:"error"`
+		AccessToken string `json:"access_token"`
+		BotUserID   string `json:"bot_user_id"`
+		Team        struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"team"`
+		Enterprise struct {
+			ID string `json:"id"`
+		} `json:"enterprise"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return SlackOAuthAccess{}, err
+	}
+	if !response.OK {
+		return SlackOAuthAccess{}, fmt.Errorf("slack oauth.v2.access failed: %s", response.Error)
+	}
+	if strings.TrimSpace(response.AccessToken) == "" || strings.TrimSpace(response.Team.ID) == "" {
+		return SlackOAuthAccess{}, errors.New("slack oauth response did not include a bot token and team")
+	}
+	return SlackOAuthAccess{
+		AccessToken:  response.AccessToken,
+		BotUserID:    response.BotUserID,
+		TeamID:       response.Team.ID,
+		TeamName:     response.Team.Name,
+		EnterpriseID: response.Enterprise.ID,
+	}, nil
 }
 
 func (c *SlackClient) PostMessage(ctx context.Context, channel, threadTS, text string) error {

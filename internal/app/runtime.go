@@ -56,8 +56,13 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		ProcessingTimeout: cfg.SlackProcessingTimeout,
 	})
 	server := httpapi.NewServer(db, httpapi.Options{
-		SigningSecret:  cfg.SlackSigningSecret,
-		GatewayService: gatewayService,
+		SigningSecret:   cfg.SlackSigningSecret,
+		SlackClientID:   cfg.SlackClientID,
+		SlackSecret:     cfg.SlackClientSecret,
+		SlackRedirect:   cfg.SlackRedirectURL,
+		DefaultTeamID:   cfg.WorkspaceDefaultTeamID,
+		DefaultTemplate: cfg.WorkspaceDefaultTemplate,
+		GatewayService:  gatewayService,
 	})
 	return &Runtime{
 		cfg:     cfg,
