@@ -84,6 +84,9 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if text == "" {
 		return nil
 	}
+	if event.Type == "message" && isMentionText(text) {
+		return nil
+	}
 
 	workspace, err := s.workspaces.ResolveOrCreate(ctx, firstNonEmpty(envelope.TeamID, event.Team), envelope.EnterpriseID, s.defaultTeamID, s.defaultTemplate, s.autoCreate)
 	if err != nil {
@@ -91,6 +94,14 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	}
 	if workspace.LastSlackEventID == envelope.EventID && envelope.EventID != "" {
 		return nil
+	}
+	if envelope.EventID != "" {
+		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
+			"last_slack_event_id":   envelope.EventID,
+			"last_slack_channel_id": event.Channel,
+			"last_slack_message_ts": event.TS,
+			"last_error":            "",
+		})
 	}
 
 	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, event.TS)
@@ -202,6 +213,10 @@ func threadTS(event SlackEvent) string {
 		return event.ThreadTS
 	}
 	return event.TS
+}
+
+func isMentionText(text string) bool {
+	return strings.Contains(text, "<@")
 }
 
 func firstNonEmpty(values ...string) string {
