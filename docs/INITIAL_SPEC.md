@@ -1182,6 +1182,8 @@ true:
   still valid
 - the runtime keeps enough conversational context to answer later questions that
   depend on earlier turns
+- Slack replies have no obvious spacing, line break, Markdown, or formatting
+  errors
 - duplicate Slack delivery does not create duplicate visible replies
 - secrets are not printed in logs, docs, Slack messages, or database fields
 
@@ -1194,6 +1196,8 @@ Continue the conversation for at least 10 assistant turns.
 Include later questions that depend on details from earlier turns.
 The bot replies coherently throughout, using the same active E2B sandbox and ACP
 session when they are still valid.
+Replies are readable in Slack, with clean spacing and no broken Markdown or
+formatting artifacts.
 The replies were produced through an E2B sandbox owned by the mapped team.
 ```
 
