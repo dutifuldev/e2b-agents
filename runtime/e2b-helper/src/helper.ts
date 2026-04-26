@@ -51,12 +51,12 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     E2B_AGENTS_RUNTIME_MODEL: envelope.model,
   };
 
-  const sandbox = await connectOrCreateSandbox(input, envelope, envs);
+  const runtime = await connectOrCreateSandbox(input, envelope, envs);
 
-  await configureGateway(sandbox, envelope);
-  const host = sandbox.getHost(envelope.gatewayPort);
+  await configureGateway(runtime.sandbox, envelope, runtime.created);
+  const host = runtime.sandbox.getHost(envelope.gatewayPort);
   return {
-    sandboxId: sandbox.sandboxId,
+    sandboxId: runtime.sandbox.sandboxId,
     templateId: input.templateId,
     host,
     baseUrl: host.startsWith("http") ? host : `https://${host}`,
@@ -119,10 +119,11 @@ async function sendPrompt(input: SendInput, envelope: Envelope) {
 async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
   if (input.sandboxId) {
     try {
-      return await Sandbox.connect(input.sandboxId, {
+      const sandbox = await Sandbox.connect(input.sandboxId, {
         apiKey: requiredEnv("E2B_API_KEY"),
         requestTimeoutMs: 60_000,
       });
+      return { sandbox, created: false };
     } catch {
       return createSandbox(input, envelope, envs);
     }
@@ -131,23 +132,27 @@ async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, en
 }
 
 async function createSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
-  return Sandbox.create(input.templateId, {
+  const sandbox = await Sandbox.create(input.templateId, {
     apiKey: requiredEnv("E2B_API_KEY"),
     timeoutMs: envelope.sandboxTimeoutMs || 3_600_000,
     requestTimeoutMs: 120_000,
     envs,
     metadata: input.metadata ?? {},
   });
+  return { sandbox, created: true };
 }
 
-async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
-  const commandEnvs = {
+async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCreated: boolean) {
+  const baseEnvs = {
     ANTHROPIC_API_KEY: requiredEnv("ANTHROPIC_API_KEY"),
+  };
+  const gatewayEnvs = {
+    ...baseEnvs,
     OPENCLAW_GATEWAY_TOKEN: envelope.gatewayToken,
   };
   await sandbox.commands.run(`mkdir -p /home/user/.openclaw/agents/main/agent`, {
     requestTimeoutMs: 60_000,
-    envs: commandEnvs,
+    envs: baseEnvs,
   });
   await sandbox.files.write(
     "/home/user/.openclaw/agents/main/agent/models.json",
@@ -182,7 +187,7 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
   await sandbox.files.write("/home/user/.openclaw/workspace/USER.md", userMarkdown());
   await sandbox.commands.run(`rm -f /home/user/.openclaw/workspace/BOOTSTRAP.md`, {
     requestTimeoutMs: 60_000,
-    envs: commandEnvs,
+    envs: baseEnvs,
   });
   const commands = [
     `openclaw config set agents.defaults.model.primary ${shellQuote(envelope.model)}`,
@@ -193,30 +198,38 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
     `openclaw config set gateway.controlUi.dangerouslyDisableDeviceAuth true`,
   ];
   for (const command of commands) {
-    await sandbox.commands.run(command, { requestTimeoutMs: 60_000, envs: commandEnvs });
+    await sandbox.commands.run(command, { requestTimeoutMs: 60_000, envs: baseEnvs });
+  }
+
+  const readyBeforeStart = await isGatewayReady(sandbox, envelope, baseEnvs);
+  if (readyBeforeStart) return;
+
+  if (!sandboxCreated) {
+    await sandbox.commands.run(
+      `bash -lc ${shellQuote(
+        `for p in "[o]penclaw gateway" "[o]penclaw-gateway"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
+      )}`,
+      { requestTimeoutMs: 60_000, envs: baseEnvs },
+    );
+    await sleep(1000);
   }
   await sandbox.commands.run(
-    `bash -lc ${shellQuote(
-      `for p in "[o]penclaw gateway" "[o]penclaw-gateway"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
-    )}`,
-    { requestTimeoutMs: 60_000, envs: commandEnvs },
-  );
-  await sleep(1000);
-  await sandbox.commands.run(
-    `openclaw gateway --allow-unconfigured --bind lan --auth token --token ${shellQuote(
-      envelope.gatewayToken,
-    )} --port ${envelope.gatewayPort}`,
-    { background: true, requestTimeoutMs: 60_000, envs: commandEnvs },
+    `openclaw gateway --allow-unconfigured --bind lan --auth token --port ${envelope.gatewayPort}`,
+    { background: true, requestTimeoutMs: 60_000, envs: gatewayEnvs },
   );
   for (let i = 0; i < 60; i++) {
-    const probe = await sandbox.commands.run(
-      `bash -lc ${shellQuote(`ss -ltn | grep -q ":${envelope.gatewayPort} " && echo ready || echo waiting`)}`,
-      { requestTimeoutMs: 20_000, envs: commandEnvs },
-    );
-    if (probe.stdout.trim() === "ready") return;
+    if (await isGatewayReady(sandbox, envelope, baseEnvs)) return;
     await sleep(1000);
   }
   throw new Error("runtime gateway did not become ready");
+}
+
+async function isGatewayReady(sandbox: Sandbox, envelope: Envelope, envs: Record<string, string>) {
+  const probe = await sandbox.commands.run(
+    `bash -lc ${shellQuote(`ss -ltn | grep -q ":${envelope.gatewayPort} " && echo ready || echo waiting`)}`,
+    { requestTimeoutMs: 20_000, envs },
+  );
+  return probe.stdout.trim() === "ready";
 }
 
 function normalizeText(text: string) {
