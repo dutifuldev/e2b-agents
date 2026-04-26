@@ -76,10 +76,7 @@ func (s *Service) HandleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 
 func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEnvelope) error {
 	event := envelope.Event
-	if event.Type != "message" && event.Type != "app_mention" {
-		return nil
-	}
-	if event.Subtype != "" || event.BotID != "" {
+	if !shouldHandleSlackEvent(event) {
 		return nil
 	}
 	text := strings.TrimSpace(event.Text)
@@ -132,6 +129,19 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		"last_activity_at":       time.Now().UTC(),
 		"last_error":             "",
 	})
+}
+
+func shouldHandleSlackEvent(event SlackEvent) bool {
+	if event.Type != "message" && event.Type != "app_mention" {
+		return false
+	}
+	if event.Subtype != "" || event.BotID != "" {
+		return false
+	}
+	if event.Type == "message" && event.ChannelType != "im" {
+		return false
+	}
+	return true
 }
 
 func (s *Service) HandleDirectMessage(ctx context.Context, input DirectMessageInput) (MessageReply, error) {

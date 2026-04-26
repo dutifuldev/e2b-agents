@@ -65,3 +65,39 @@ func TestIsBotMentionText(t *testing.T) {
 		t.Fatal("expected other user mention not to match")
 	}
 }
+
+func TestShouldHandleSlackEvent(t *testing.T) {
+	cases := []struct {
+		name  string
+		event SlackEvent
+		want  bool
+	}{
+		{
+			name:  "app mention in channel",
+			event: SlackEvent{Type: "app_mention", ChannelType: "channel"},
+			want:  true,
+		},
+		{
+			name:  "direct message",
+			event: SlackEvent{Type: "message", ChannelType: "im"},
+			want:  true,
+		},
+		{
+			name:  "ordinary channel message",
+			event: SlackEvent{Type: "message", ChannelType: "channel"},
+			want:  false,
+		},
+		{
+			name:  "bot message",
+			event: SlackEvent{Type: "message", ChannelType: "im", BotID: "B123"},
+			want:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldHandleSlackEvent(tc.event); got != tc.want {
+				t.Fatalf("shouldHandleSlackEvent() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

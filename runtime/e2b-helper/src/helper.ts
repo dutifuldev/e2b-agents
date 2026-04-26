@@ -1,4 +1,5 @@
 import { Sandbox } from "e2b";
+import { createHash } from "node:crypto";
 
 type Envelope = {
   command: "ensure" | "send";
@@ -23,6 +24,8 @@ type SendInput = {
   prompt: string;
   sessionKey: string;
 };
+
+const gatewayFingerprintPath = "/home/user/.openclaw/e2b-agents-gateway.sha256";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -201,8 +204,10 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCre
     await sandbox.commands.run(command, { requestTimeoutMs: 60_000, envs: baseEnvs });
   }
 
+  const fingerprint = gatewayFingerprint(envelope);
   const readyBeforeStart = await isGatewayReady(sandbox, envelope, baseEnvs);
-  if (readyBeforeStart) return;
+  const currentFingerprint = await readGatewayFingerprint(sandbox, baseEnvs);
+  if (readyBeforeStart && currentFingerprint === fingerprint) return;
 
   if (!sandboxCreated) {
     await sandbox.commands.run(
@@ -218,10 +223,32 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCre
     { background: true, requestTimeoutMs: 60_000, envs: gatewayEnvs },
   );
   for (let i = 0; i < 60; i++) {
-    if (await isGatewayReady(sandbox, envelope, baseEnvs)) return;
+    if (await isGatewayReady(sandbox, envelope, baseEnvs)) {
+      await sandbox.files.write(gatewayFingerprintPath, `${fingerprint}\n`);
+      return;
+    }
     await sleep(1000);
   }
   throw new Error("runtime gateway did not become ready");
+}
+
+async function readGatewayFingerprint(sandbox: Sandbox, envs: Record<string, string>) {
+  const output = await sandbox.commands.run(
+    `bash -lc ${shellQuote(`test -f ${shellQuote(gatewayFingerprintPath)} && cat ${shellQuote(gatewayFingerprintPath)} || true`)}`,
+    { requestTimeoutMs: 20_000, envs },
+  );
+  return output.stdout.trim();
+}
+
+function gatewayFingerprint(envelope: Envelope) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      model: envelope.model,
+      gatewayPort: envelope.gatewayPort,
+      gatewayToken: envelope.gatewayToken,
+      version: 1,
+    }))
+    .digest("hex");
 }
 
 async function isGatewayReady(sandbox: Sandbox, envelope: Envelope, envs: Record<string, string>) {
