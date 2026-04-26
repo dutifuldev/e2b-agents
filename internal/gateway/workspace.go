@@ -126,6 +126,24 @@ func (s *WorkspaceService) IsSlackEventProcessed(ctx context.Context, eventID st
 	return count > 0, err
 }
 
+func (s *WorkspaceService) ClaimSlackEvent(ctx context.Context, workspace database.SlackWorkspace, eventID string) (bool, error) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return true, nil
+	}
+	event := database.SlackProcessedEvent{
+		EventID:     eventID,
+		WorkspaceID: workspace.ID,
+		SlackTeamID: workspace.SlackTeamID,
+		CreatedAt:   time.Now().UTC(),
+	}
+	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&event)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
 func (s *WorkspaceService) MarkSlackEventProcessed(ctx context.Context, workspace database.SlackWorkspace, eventID string) error {
 	eventID = strings.TrimSpace(eventID)
 	if eventID == "" {

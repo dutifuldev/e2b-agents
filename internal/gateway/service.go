@@ -100,14 +100,12 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if err != nil {
 		return err
 	}
-	if envelope.EventID != "" {
-		processed, err := s.workspaces.IsSlackEventProcessed(ctx, envelope.EventID)
-		if err != nil {
-			return err
-		}
-		if processed {
-			return nil
-		}
+	claimed, err := s.workspaces.ClaimSlackEvent(ctx, workspace, envelope.EventID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
 	}
 
 	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
@@ -124,9 +122,6 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	var postErr error
 	if event.Channel != "" {
 		postErr = s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text)
-	}
-	if err := s.workspaces.MarkSlackEventProcessed(ctx, workspace, envelope.EventID); err != nil {
-		return err
 	}
 	updates := map[string]any{
 		"last_slack_event_id":    envelope.EventID,
