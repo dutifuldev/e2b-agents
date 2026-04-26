@@ -103,16 +103,6 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if workspace.LastSlackEventID == envelope.EventID && envelope.EventID != "" {
 		return nil
 	}
-	if envelope.EventID != "" {
-		if err := s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
-			"last_slack_event_id":   envelope.EventID,
-			"last_slack_channel_id": event.Channel,
-			"last_slack_message_ts": event.TS,
-			"last_error":            "",
-		}); err != nil {
-			return err
-		}
-	}
 
 	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
 	if err != nil {
