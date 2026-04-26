@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,22 @@ func NewSlackClient(token string) *SlackClient {
 		token:      strings.TrimSpace(token),
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func SlackTokenFromRef(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", errors.New("slack bot token reference is empty")
+	}
+	name, ok := strings.CutPrefix(ref, "env:")
+	if !ok {
+		return "", fmt.Errorf("unsupported slack token reference: %s", ref)
+	}
+	token := strings.TrimSpace(os.Getenv(name))
+	if token == "" {
+		return "", fmt.Errorf("%s is not set", name)
+	}
+	return token, nil
 }
 
 func VerifySlackSignature(signingSecret string, headers http.Header, body []byte, now time.Time) error {

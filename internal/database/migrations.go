@@ -25,7 +25,7 @@ func ApplyMigrations(ctx context.Context, db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	if _, err := sqlDB.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+	if _, err := sqlDB.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`); err != nil {
 		return err
 	}
 	migrations, err := loadMigrations()
@@ -51,8 +51,12 @@ func ApplyTestSchema(db *gorm.DB) error {
 	return db.AutoMigrate(&SlackWorkspace{}, &SchemaMigration{})
 }
 
+func MigrationDirectoryEnv() string {
+	return "E2B_AGENTS_MIGRATIONS_DIR"
+}
+
 func loadMigrations() ([]migration, error) {
-	dir := strings.TrimSpace(os.Getenv("E2B_AGENTS_MIGRATIONS_DIR"))
+	dir := strings.TrimSpace(os.Getenv(MigrationDirectoryEnv()))
 	if dir == "" {
 		dir = "migrations"
 	}

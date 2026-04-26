@@ -17,8 +17,8 @@ CREATE TABLE IF NOT EXISTS slack_workspaces (
     last_activity_at TIMESTAMPTZ,
     last_error TEXT NOT NULL DEFAULT '',
     installed_by_user_id TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_slack_workspaces_team_id

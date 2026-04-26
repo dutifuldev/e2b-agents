@@ -19,3 +19,20 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("RuntimeModel = %q, want %q", cfg.RuntimeModel, DefaultModel)
 	}
 }
+
+func TestValidateServeRejectsDefaultGatewayToken(t *testing.T) {
+	cfg := Config{
+		DatabaseURL:          "sqlite://test.db",
+		E2BAPIKey:            "e2b",
+		AnthropicAPIKey:      "anthropic",
+		SlackSigningSecret:   "signing",
+		SlackBotToken:        "slack",
+		E2BHelperScript:      "helper.js",
+		OpenClawGatewayPort:  18789,
+		OpenClawGatewayToken: DefaultOpenClawGatewayToken,
+		SandboxTimeout:       1,
+	}
+	if err := cfg.ValidateServe(); err == nil {
+		t.Fatal("expected default gateway token to be rejected")
+	}
+}

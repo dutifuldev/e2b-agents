@@ -51,18 +51,7 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     E2B_AGENTS_RUNTIME_MODEL: envelope.model,
   };
 
-  const sandbox = input.sandboxId
-    ? await Sandbox.connect(input.sandboxId, {
-        apiKey: requiredEnv("E2B_API_KEY"),
-        requestTimeoutMs: 60_000,
-      })
-    : await Sandbox.create(input.templateId, {
-        apiKey: requiredEnv("E2B_API_KEY"),
-        timeoutMs: envelope.sandboxTimeoutMs || 3_600_000,
-        requestTimeoutMs: 120_000,
-        envs,
-        metadata: input.metadata ?? {},
-      });
+  const sandbox = await connectOrCreateSandbox(input, envelope, envs);
 
   await configureGateway(sandbox, envelope);
   const host = sandbox.getHost(envelope.gatewayPort);
@@ -125,6 +114,30 @@ async function sendPrompt(input: SendInput, envelope: Envelope) {
     text: normalizeText(text),
     sessionKey: input.sessionKey,
   };
+}
+
+async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
+  if (input.sandboxId) {
+    try {
+      return await Sandbox.connect(input.sandboxId, {
+        apiKey: requiredEnv("E2B_API_KEY"),
+        requestTimeoutMs: 60_000,
+      });
+    } catch {
+      return createSandbox(input, envelope, envs);
+    }
+  }
+  return createSandbox(input, envelope, envs);
+}
+
+async function createSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
+  return Sandbox.create(input.templateId, {
+    apiKey: requiredEnv("E2B_API_KEY"),
+    timeoutMs: envelope.sandboxTimeoutMs || 3_600_000,
+    requestTimeoutMs: 120_000,
+    envs,
+    metadata: input.metadata ?? {},
+  });
 }
 
 async function configureGateway(sandbox: Sandbox, envelope: Envelope) {

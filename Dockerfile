@@ -11,7 +11,7 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
 COPY --from=node-deps /app/runtime/e2b-helper/dist ./runtime/e2b-helper/dist
-RUN CGO_ENABLED=0 go build -o /out/e2b-agents ./cmd/e2b-agents
+RUN go build -o /out/e2b-agents ./cmd/e2b-agents
 
 FROM node:22-bookworm
 WORKDIR /app

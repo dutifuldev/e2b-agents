@@ -44,3 +44,24 @@ func TestNormalizeSlackText(t *testing.T) {
 		t.Fatalf("NormalizeSlackText() = %q, want %q", got, want)
 	}
 }
+
+func TestSlackTokenFromRef(t *testing.T) {
+	t.Setenv("TEST_SLACK_TOKEN", "xoxb-test")
+
+	got, err := SlackTokenFromRef("env:TEST_SLACK_TOKEN")
+	if err != nil {
+		t.Fatalf("SlackTokenFromRef() returned error: %v", err)
+	}
+	if got != "xoxb-test" {
+		t.Fatalf("SlackTokenFromRef() = %q, want xoxb-test", got)
+	}
+}
+
+func TestIsBotMentionText(t *testing.T) {
+	if !isBotMentionText("hello <@U123>", "U123") {
+		t.Fatal("expected bot mention to match")
+	}
+	if isBotMentionText("hello <@U456>", "U123") {
+		t.Fatal("expected other user mention not to match")
+	}
+}

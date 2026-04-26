@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const DefaultModel = "anthropic/claude-sonnet-4-6"
+const (
+	DefaultModel                = "anthropic/claude-sonnet-4-6"
+	DefaultOpenClawGatewayToken = "e2b-agents-local-token"
+)
 
 type Config struct {
 	AppAddr                  string
@@ -69,7 +72,7 @@ func Load() Config {
 		E2BHelperNode:            getenvDefault("E2B_HELPER_NODE", "node"),
 		E2BHelperScript:          getenvDefault("E2B_HELPER_SCRIPT", filepath.Join("runtime", "e2b-helper", "dist", "helper.js")),
 		OpenClawGatewayPort:      intDefault("OPENCLAW_GATEWAY_PORT", 18789),
-		OpenClawGatewayToken:     getenvDefault("OPENCLAW_GATEWAY_TOKEN", "e2b-agents-local-token"),
+		OpenClawGatewayToken:     getenvDefault("OPENCLAW_GATEWAY_TOKEN", DefaultOpenClawGatewayToken),
 		SandboxTimeout:           durationDefault("E2B_SANDBOX_TIMEOUT", time.Hour),
 		SandboxRequestTimeout:    durationDefault("E2B_SANDBOX_REQUEST_TIMEOUT", 5*time.Minute),
 		SlackProcessingTimeout:   durationDefault("SLACK_PROCESSING_TIMEOUT", 10*time.Minute),
@@ -106,6 +109,9 @@ func (c Config) ValidateServe() error {
 	}
 	if c.OpenClawGatewayPort <= 0 {
 		return errors.New("OPENCLAW_GATEWAY_PORT must be positive")
+	}
+	if strings.TrimSpace(c.OpenClawGatewayToken) == "" || c.OpenClawGatewayToken == DefaultOpenClawGatewayToken {
+		return errors.New("OPENCLAW_GATEWAY_TOKEN must be set to a non-default secret")
 	}
 	if c.SandboxTimeout <= 0 {
 		return errors.New("E2B_SANDBOX_TIMEOUT must be positive")

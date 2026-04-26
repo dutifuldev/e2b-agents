@@ -86,13 +86,13 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if text == "" {
 		return nil
 	}
-	if event.Type == "message" && isMentionText(text) {
-		return nil
-	}
 
 	workspace, err := s.workspaces.ResolveOrCreate(ctx, firstNonEmpty(envelope.TeamID, event.Team), envelope.EnterpriseID, s.defaultTeamID, s.defaultTemplate, s.autoCreate)
 	if err != nil {
 		return err
+	}
+	if event.Type == "message" && isBotMentionText(text, workspace.BotUserID) {
+		return nil
 	}
 	if workspace.LastSlackEventID == envelope.EventID && envelope.EventID != "" {
 		return nil
@@ -112,13 +112,13 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 			"setup_status": SetupStatusFailed,
 			"last_error":   err.Error(),
 		})
-		if s.slack != nil && event.Channel != "" {
-			_ = s.slack.PostMessage(ctx, event.Channel, threadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
+		if event.Channel != "" {
+			_ = s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
 		}
 		return err
 	}
-	if s.slack != nil && event.Channel != "" {
-		if err := s.slack.PostMessage(ctx, event.Channel, threadTS(event), reply.Text); err != nil {
+	if event.Channel != "" {
+		if err := s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text); err != nil {
 			return err
 		}
 	}
@@ -207,6 +207,21 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 	}, nil
 }
 
+func (s *Service) postWorkspaceMessage(ctx context.Context, workspace database.SlackWorkspace, channel, threadTSValue, text string) error {
+	client := s.slack
+	if strings.TrimSpace(workspace.BotTokenRef) != "" {
+		token, err := SlackTokenFromRef(workspace.BotTokenRef)
+		if err != nil {
+			return err
+		}
+		client = NewSlackClient(token)
+	}
+	if client == nil {
+		return errors.New("slack client is not configured")
+	}
+	return client.PostMessage(ctx, channel, threadTSValue, text)
+}
+
 func threadTS(event SlackEvent) string {
 	if strings.TrimSpace(event.ThreadTS) != "" {
 		return event.ThreadTS
@@ -214,8 +229,9 @@ func threadTS(event SlackEvent) string {
 	return event.TS
 }
 
-func isMentionText(text string) bool {
-	return strings.Contains(text, "<@")
+func isBotMentionText(text, botUserID string) bool {
+	botUserID = strings.TrimSpace(botUserID)
+	return botUserID != "" && strings.Contains(text, "<@"+botUserID+">")
 }
 
 func firstNonEmpty(values ...string) string {

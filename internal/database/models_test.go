@@ -1,6 +1,9 @@
 package database
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestTableNames(t *testing.T) {
 	cases := map[string]string{
@@ -14,5 +17,22 @@ func TestTableNames(t *testing.T) {
 	}
 	if (SlackWorkspace{}).TableName() != TableSlackWorkspaces {
 		t.Fatalf("SlackWorkspace table = %q, want %q", (SlackWorkspace{}).TableName(), TableSlackWorkspaces)
+	}
+}
+
+func TestApplyMigrationsSQLite(t *testing.T) {
+	t.Setenv(MigrationDirectoryEnv(), filepath.Join("..", "..", "migrations"))
+
+	db, err := Open("sqlite://"+filepath.Join(t.TempDir(), "test.db"), PoolConfig{})
+	if err != nil {
+		t.Fatalf("Open() returned error: %v", err)
+	}
+	if err := ApplyMigrations(t.Context(), db); err != nil {
+		t.Fatalf("ApplyMigrations() returned error: %v", err)
+	}
+
+	var count int64
+	if err := db.Table(TableSlackWorkspaces).Count(&count).Error; err != nil {
+		t.Fatalf("query %s returned error: %v", TableSlackWorkspaces, err)
 	}
 }
