@@ -27,6 +27,8 @@ type Options struct {
 	GatewayService *gateway.Service
 }
 
+const slackMaxBodyBytes int64 = 1 << 20
+
 func NewServer(db *gorm.DB, opts Options) *Server {
 	e := echo.New()
 	e.HideBanner = true
@@ -90,9 +92,9 @@ func (s *Server) handleReady(c echo.Context) error {
 }
 
 func (s *Server) handleSlackEvents(c echo.Context) error {
-	body, err := io.ReadAll(c.Request().Body)
+	body, err := readLimitedBody(c)
 	if err != nil {
-		return err
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{"message": "Request body too large"})
 	}
 	if err := gateway.VerifySlackSignature(s.signingSecret, c.Request().Header, body, time.Now()); err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid Slack signature"})
@@ -113,9 +115,9 @@ func (s *Server) handleSlackEvents(c echo.Context) error {
 }
 
 func (s *Server) handleSlackForm(c echo.Context) error {
-	body, err := io.ReadAll(c.Request().Body)
+	body, err := readLimitedBody(c)
 	if err != nil {
-		return err
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{"message": "Request body too large"})
 	}
 	if err := gateway.VerifySlackSignature(s.signingSecret, c.Request().Header, body, time.Now()); err != nil {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid Slack signature"})
@@ -125,4 +127,10 @@ func (s *Server) handleSlackForm(c echo.Context) error {
 
 func (s *Server) notImplemented(c echo.Context) error {
 	return c.JSON(http.StatusNotImplemented, map[string]string{"message": "Not Implemented"})
+}
+
+func readLimitedBody(c echo.Context) ([]byte, error) {
+	request := c.Request()
+	request.Body = http.MaxBytesReader(c.Response().Writer, request.Body, slackMaxBodyBytes)
+	return io.ReadAll(request.Body)
 }
