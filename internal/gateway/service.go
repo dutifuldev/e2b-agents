@@ -100,8 +100,14 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if err != nil {
 		return err
 	}
-	if workspace.LastSlackEventID == envelope.EventID && envelope.EventID != "" {
-		return nil
+	if envelope.EventID != "" {
+		processed, err := s.workspaces.IsSlackEventProcessed(ctx, envelope.EventID)
+		if err != nil {
+			return err
+		}
+		if processed {
+			return nil
+		}
 	}
 
 	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
@@ -119,6 +125,9 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		if err := s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text); err != nil {
 			return err
 		}
+	}
+	if err := s.workspaces.MarkSlackEventProcessed(ctx, workspace, envelope.EventID); err != nil {
+		return err
 	}
 	return s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"last_slack_event_id":    envelope.EventID,
@@ -155,10 +164,7 @@ func (s *Service) HandleDirectMessage(ctx context.Context, input DirectMessageIn
 		return MessageReply{}, err
 	}
 	if input.PostToSlack {
-		if s.slack == nil {
-			return MessageReply{}, errors.New("slack client is not configured")
-		}
-		if err := s.slack.PostMessage(ctx, input.ChannelID, "", reply.Text); err != nil {
+		if err := s.postWorkspaceMessage(ctx, workspace, input.ChannelID, "", reply.Text); err != nil {
 			return MessageReply{}, err
 		}
 	}

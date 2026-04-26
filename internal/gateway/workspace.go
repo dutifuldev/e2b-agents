@@ -9,6 +9,7 @@ import (
 
 	"github.com/dutifuldev/e2b-agents/internal/database"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -113,6 +114,30 @@ func (s *WorkspaceService) GetBySlackTeamID(ctx context.Context, slackTeamID str
 func (s *WorkspaceService) UpdateAfterMessage(ctx context.Context, workspaceID string, updates map[string]any) error {
 	updates["updated_at"] = time.Now().UTC()
 	return s.db.WithContext(ctx).Model(&database.SlackWorkspace{}).Where("id = ?", workspaceID).Updates(updates).Error
+}
+
+func (s *WorkspaceService) IsSlackEventProcessed(ctx context.Context, eventID string) (bool, error) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return false, nil
+	}
+	var count int64
+	err := s.db.WithContext(ctx).Model(&database.SlackProcessedEvent{}).Where("event_id = ?", eventID).Count(&count).Error
+	return count > 0, err
+}
+
+func (s *WorkspaceService) MarkSlackEventProcessed(ctx context.Context, workspace database.SlackWorkspace, eventID string) error {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return nil
+	}
+	event := database.SlackProcessedEvent{
+		EventID:     eventID,
+		WorkspaceID: workspace.ID,
+		SlackTeamID: workspace.SlackTeamID,
+		CreatedAt:   time.Now().UTC(),
+	}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error
 }
 
 func (s *WorkspaceService) ResolveOrCreate(ctx context.Context, slackTeamID, enterpriseID, defaultTeamID, defaultTemplateID string, autoCreate bool) (database.SlackWorkspace, error) {

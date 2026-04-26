@@ -48,7 +48,7 @@ func ApplyMigrations(ctx context.Context, db *gorm.DB) error {
 }
 
 func ApplyTestSchema(db *gorm.DB) error {
-	return db.AutoMigrate(&SlackWorkspace{}, &SchemaMigration{})
+	return db.AutoMigrate(&SlackWorkspace{}, &SlackProcessedEvent{}, &SchemaMigration{})
 }
 
 func MigrationDirectoryEnv() string {

@@ -29,6 +29,17 @@ func (SlackWorkspace) TableName() string {
 	return TableSlackWorkspaces
 }
 
+type SlackProcessedEvent struct {
+	EventID     string `gorm:"primaryKey"`
+	WorkspaceID string `gorm:"index;not null"`
+	SlackTeamID string `gorm:"index;not null"`
+	CreatedAt   time.Time
+}
+
+func (SlackProcessedEvent) TableName() string {
+	return TableSlackProcessedEvents
+}
+
 type SchemaMigration struct {
 	Version   int `gorm:"primaryKey"`
 	AppliedAt time.Time
