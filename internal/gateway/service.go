@@ -107,7 +107,7 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		})
 	}
 
-	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, threadTS(event))
+	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
 	if err != nil {
 		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"setup_status": SetupStatusFailed,
@@ -268,6 +268,16 @@ func threadTS(event SlackEvent) string {
 		return event.ThreadTS
 	}
 	return event.TS
+}
+
+func sessionThreadRootTS(event SlackEvent) string {
+	if strings.TrimSpace(event.ThreadTS) != "" {
+		return event.ThreadTS
+	}
+	if event.Type == "app_mention" {
+		return event.TS
+	}
+	return ""
 }
 
 func isBotMentionText(text, botUserID string) bool {

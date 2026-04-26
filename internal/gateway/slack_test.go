@@ -112,3 +112,15 @@ func TestSlackSessionKeyScopesThreadRoot(t *testing.T) {
 		t.Fatalf("slackSessionKey() = %q, want direct fallback", got)
 	}
 }
+
+func TestSessionThreadRootTS(t *testing.T) {
+	if got := sessionThreadRootTS(SlackEvent{Type: "message", ChannelType: "im", TS: "1777220000.000100"}); got != "" {
+		t.Fatalf("sessionThreadRootTS() = %q, want empty direct fallback", got)
+	}
+	if got := sessionThreadRootTS(SlackEvent{Type: "app_mention", TS: "1777220000.000100"}); got != "1777220000.000100" {
+		t.Fatalf("sessionThreadRootTS() = %q, want app mention timestamp", got)
+	}
+	if got := sessionThreadRootTS(SlackEvent{Type: "app_mention", TS: "1777220000.000100", ThreadTS: "1777220000.000000"}); got != "1777220000.000000" {
+		t.Fatalf("sessionThreadRootTS() = %q, want thread root timestamp", got)
+	}
+}

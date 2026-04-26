@@ -73,7 +73,11 @@ func (s *WorkspaceService) EnsureWorkspace(ctx context.Context, input EnsureWork
 		UpdatedAt:         now,
 	}
 	if err := s.db.WithContext(ctx).Where("slack_team_id = ?", input.SlackTeamID).FirstOrCreate(&workspace).Error; err != nil {
-		return database.SlackWorkspace{}, err
+		existing, getErr := s.GetBySlackTeamID(ctx, input.SlackTeamID)
+		if getErr != nil {
+			return database.SlackWorkspace{}, err
+		}
+		workspace = existing
 	}
 	updates := map[string]any{
 		"team_id":             input.TeamID,
