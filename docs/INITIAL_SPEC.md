@@ -29,6 +29,11 @@ The E2B template should contain the packaged agent runtime and the default agent
 identity: server, tools, default prompt, default name, default metadata, and ACP
 startup behavior.
 
+The initial packaged runtime should be OpenClaw. The default model for that
+runtime should be Anthropic Claude Sonnet 4.6, using the model identifier
+`anthropic/claude-sonnet-4-6`. The Anthropic API key is supplied through
+deployment secrets and must not be committed.
+
 The control plane should not create separate agent, agent image, instance, or
 agent session objects for the MVP. It can store Slack workspace configuration
 that points to the current E2B sandbox ID and E2B template ID.
@@ -1105,6 +1110,92 @@ The first working version should include:
 - Slack message delivery to ACP
 - ACP response delivery back to Slack
 - sandbox timeout cleanup
+
+## First Implementation Pass
+
+The first implementation pass is not just service scaffolding. It should produce
+an end-to-end Slack-to-E2B-to-runtime multi-turn conversation.
+
+The system being implemented is a gateway and control plane. e2b-agents itself
+does not become the agent. The Slack app talks to e2b-agents, e2b-agents creates
+or resumes an E2B sandbox, OpenClaw runs inside that sandbox, and the model call
+is made by the runtime using Anthropic Claude Sonnet 4.6.
+
+Required implementation work:
+
+- create the Go project structure for the API, Slack gateway, worker, database,
+  E2B adapter, Slack client, and ACP client
+- load configuration from environment variables and fail clearly when required
+  values are missing
+- connect to Postgres using GORM
+- define the explicit `slack_workspaces` table model and migration
+- expose `GET /healthz`
+- expose Slack ingress endpoints for events, interactions, commands, install,
+  and OAuth callback
+- verify Slack request signatures
+- acknowledge Slack events quickly enough for Slack retry behavior
+- deduplicate Slack retries using Slack event and message identifiers
+- resolve Slack workspace configuration from `slack_workspaces`
+- resolve the Slack user to the owning E2B user/team model where policy allows
+- create or connect to the current E2B sandbox for the Slack workspace
+- create the sandbox from the workspace's configured E2B template ID or alias
+  when no current sandbox exists
+- pass required runtime secrets, including the Anthropic API key, through secure
+  runtime configuration and never commit or log them
+- write runtime context into the sandbox before first prompt delivery when the
+  template requires it
+- wait for the runtime health endpoint and ACP metadata endpoint
+- open an ACP connection from e2b-agents to OpenClaw inside the sandbox
+- initialize or load an ACP session
+- forward the Slack message into the ACP session
+- collect the visible assistant response
+- post the assistant response back to Slack with the workspace bot token
+- persist `current_sandbox_id`, `current_acp_session_id`,
+  `last_slack_event_id`, `last_slack_channel_id`, `last_slack_message_ts`,
+  `setup_status`, `last_activity_at`, and `last_error` where applicable
+- log the request path with request IDs and without raw provider tokens or model
+  secrets
+
+Implementation can be incremental, but the pass is not considered complete when
+only the API, database, or health check exists.
+
+## Pass Criteria
+
+The first implementation pass is complete only when all of the following are
+true:
+
+- the service starts from the repository configuration without manual code edits
+- `GET /healthz` succeeds
+- the service can connect to the configured Postgres database
+- the `slack_workspaces` schema exists with explicit GORM definitions
+- a Slack event sent to the configured app is signature-verified and
+  acknowledged
+- the Slack workspace resolves to a configured E2B team and template
+- the service creates or resumes an E2B sandbox from that template
+- OpenClaw is reachable inside the sandbox through the expected ACP endpoint
+- the runtime uses Anthropic Claude Sonnet 4.6 through the configured Anthropic
+  API key
+- a real Slack conversation produces at least 10 meaningful assistant responses
+  posted back into Slack
+- the Slack workspace row records the active E2B sandbox and ACP session pointers
+- follow-up Slack messages reuse the same sandbox and ACP session when they are
+  still valid
+- the runtime keeps enough conversational context to answer later questions that
+  depend on earlier turns
+- duplicate Slack delivery does not create duplicate visible replies
+- secrets are not printed in logs, docs, Slack messages, or database fields
+
+The practical acceptance test is:
+
+```text
+Send an initial message in Slack.
+The configured Slack bot replies with a meaningful OpenClaw-generated answer.
+Continue the conversation for at least 10 assistant turns.
+Include later questions that depend on details from earlier turns.
+The bot replies coherently throughout, using the same active E2B sandbox and ACP
+session when they are still valid.
+The replies were produced through an E2B sandbox owned by the mapped team.
+```
 
 Nice-to-have but not required for MVP:
 
