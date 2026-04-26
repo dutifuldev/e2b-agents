@@ -102,7 +102,7 @@ func (s *Server) handleSlackEvents(c echo.Context) error {
 		Challenge string `json:"challenge"`
 	}
 	if err := json.Unmarshal(body, &challenge); err == nil && challenge.Type == "url_verification" {
-		return c.JSON(http.StatusOK, map[string]string{"challenge": challenge.Challenge})
+		return c.String(http.StatusOK, challenge.Challenge)
 	}
 	envelope, err := gateway.DecodeSlackEnvelope(body)
 	if err != nil {

@@ -103,7 +103,7 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		})
 	}
 
-	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, event.TS)
+	reply, err := s.sendToRuntime(ctx, workspace, event.User, event.Channel, text, threadTS(event))
 	if err != nil {
 		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"setup_status": SetupStatusFailed,
@@ -175,7 +175,7 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 	if s.runtime == nil {
 		return MessageReply{}, errors.New("runtime client is not configured")
 	}
-	sessionKey := fmt.Sprintf("slack:%s:%s:%s", slackSessionKeyVersion, workspace.SlackTeamID, channelID)
+	sessionKey := slackSessionKey(workspace.SlackTeamID, channelID, messageTS)
 	_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"setup_status": SetupStatusCreatingSandbox,
 		"last_error":   "",
@@ -215,6 +215,11 @@ func (s *Service) sendToRuntime(ctx context.Context, workspace database.SlackWor
 		SandboxID: ensure.SandboxID,
 		SessionID: send.SessionKey,
 	}, nil
+}
+
+func slackSessionKey(slackTeamID, channelID, threadRootTS string) string {
+	conversationID := firstNonEmpty(threadRootTS, "direct")
+	return fmt.Sprintf("slack:%s:%s:%s:%s", slackSessionKeyVersion, slackTeamID, channelID, conversationID)
 }
 
 func (s *Service) postWorkspaceMessage(ctx context.Context, workspace database.SlackWorkspace, channel, threadTSValue, text string) error {

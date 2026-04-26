@@ -101,3 +101,14 @@ func TestShouldHandleSlackEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestSlackSessionKeyScopesThreadRoot(t *testing.T) {
+	first := slackSessionKey("T123", "C123", "1777220000.000100")
+	second := slackSessionKey("T123", "C123", "1777220000.000200")
+	if first == second {
+		t.Fatal("expected different thread roots to produce different session keys")
+	}
+	if got := slackSessionKey("T123", "C123", ""); got != "slack:v1:T123:C123:direct" {
+		t.Fatalf("slackSessionKey() = %q, want direct fallback", got)
+	}
+}
