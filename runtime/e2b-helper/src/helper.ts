@@ -128,11 +128,17 @@ async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, en
       });
       await sandbox.setTimeout(envelope.sandboxTimeoutMs || 3_600_000, { requestTimeoutMs: 60_000 });
       return { sandbox, created: false };
-    } catch {
+    } catch (error) {
+      if (!isMissingSandboxError(error)) throw error;
       return createSandbox(input, envelope, envs);
     }
   }
   return createSandbox(input, envelope, envs);
+}
+
+function isMissingSandboxError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(404|410)\b/.test(message) || /not found|expired|does not exist/i.test(message);
 }
 
 async function createSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {

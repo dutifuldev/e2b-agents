@@ -121,15 +121,14 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		}
 		return err
 	}
+	var postErr error
 	if event.Channel != "" {
-		if err := s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text); err != nil {
-			return err
-		}
+		postErr = s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text)
 	}
 	if err := s.workspaces.MarkSlackEventProcessed(ctx, workspace, envelope.EventID); err != nil {
 		return err
 	}
-	return s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
+	updates := map[string]any{
 		"last_slack_event_id":    envelope.EventID,
 		"last_slack_channel_id":  event.Channel,
 		"last_slack_message_ts":  event.TS,
@@ -138,7 +137,14 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		"setup_status":           SetupStatusReady,
 		"last_activity_at":       time.Now().UTC(),
 		"last_error":             "",
-	})
+	}
+	if postErr != nil {
+		updates["last_error"] = postErr.Error()
+	}
+	if err := s.workspaces.UpdateAfterMessage(ctx, workspace.ID, updates); err != nil {
+		return err
+	}
+	return postErr
 }
 
 func shouldHandleSlackEvent(event SlackEvent) bool {
