@@ -56,7 +56,7 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
 
   const runtime = await connectOrCreateSandbox(input, envelope, envs);
 
-  await configureGateway(runtime.sandbox, envelope, runtime.created);
+  await configureGateway(runtime.sandbox, envelope);
   const host = runtime.sandbox.getHost(envelope.gatewayPort);
   return {
     sandboxId: runtime.sandbox.sandboxId,
@@ -146,7 +146,7 @@ async function createSandbox(input: EnsureInput, envelope: Envelope, envs: Recor
   return { sandbox, created: true };
 }
 
-async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCreated: boolean) {
+async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
   const baseEnvs = {
     ANTHROPIC_API_KEY: requiredEnv("ANTHROPIC_API_KEY"),
   };
@@ -154,7 +154,7 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCre
     ...baseEnvs,
     OPENCLAW_GATEWAY_TOKEN: envelope.gatewayToken,
   };
-  await sandbox.commands.run(`mkdir -p /home/user/.openclaw/agents/main/agent`, {
+  await sandbox.commands.run(`mkdir -p /home/user/.openclaw/agents/main/agent /home/user/.openclaw/workspace`, {
     requestTimeoutMs: 60_000,
     envs: baseEnvs,
   });
@@ -210,15 +210,13 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope, sandboxCre
   const currentFingerprint = await readGatewayFingerprint(sandbox, baseEnvs);
   if (readyBeforeStart && currentFingerprint === fingerprint) return;
 
-  if (!sandboxCreated) {
-    await sandbox.commands.run(
-      `bash -lc ${shellQuote(
-        `for p in "[o]penclaw gateway" "[o]penclaw-gateway"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
-      )}`,
-      { requestTimeoutMs: 60_000, envs: baseEnvs },
-    );
-    await sleep(1000);
-  }
+  await sandbox.commands.run(
+    `bash -lc ${shellQuote(
+      `for p in "[o]penclaw gateway" "[o]penclaw-gateway"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
+    )}`,
+    { requestTimeoutMs: 60_000, envs: baseEnvs },
+  );
+  await sleep(1000);
   await sandbox.commands.run(
     `openclaw gateway --allow-unconfigured --bind lan --auth token --port ${envelope.gatewayPort}`,
     { background: true, requestTimeoutMs: 60_000, envs: gatewayEnvs },
