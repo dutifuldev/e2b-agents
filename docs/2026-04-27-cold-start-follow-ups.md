@@ -3,10 +3,9 @@
 The warm Slack path is now fast because follow-up messages reuse the current
 sandbox and ACP session. The remaining delay is cold recovery: when the stored
 sandbox is expired or unreachable, the service has to create or reconnect a
-sandbox, configure the runtime, start the gateway, start the ACP adapter, then
-send the first turn.
+sandbox, configure the runtime, and send the first turn.
 
-Last measured production cold recovery:
+Previously measured production cold recovery:
 
 ```text
 total Slack event handling: ~81s
@@ -27,6 +26,27 @@ template should snapshot a running OpenClaw gateway and ACP adapter. E2B start
 commands run during template build, E2B waits for the ready command, then
 snapshots the filesystem and running processes. New sandboxes created from that
 template should load with the runtime already running.
+
+The helper now keeps that benefit in the normal cold path. After
+`Sandbox.create()`, it writes runtime files, asks OpenClaw to reload secrets,
+checks that the ACP adapter HTTP process is live, and then sends the prompt
+without restarting OpenClaw.
+
+If the first prompt after that fast ensure returns an availability-style error,
+the gateway forces one runtime recovery and resends the same prompt. This keeps
+the normal path short while still handling a snapshotted adapter that is
+listening but cannot yet complete the ACP prompt path.
+
+This assumes the runtime model matches the model baked into the template. For a
+new sandbox, if the deployment requests a different model, the helper restarts
+the runtime so OpenClaw reads the new config instead of silently serving the
+template config. The production direction is to publish a matching template when
+config-affecting runtime settings change.
+
+For reconnected sandboxes, including custom-model deployments, the helper checks
+the gateway's active default model before it rewrites runtime config and before
+taking the fast path. If the running model does not match the requested model, it
+restarts instead of serving stale runtime config.
 
 ## Next Work
 
@@ -68,16 +88,16 @@ Implementation status: the runtime setup now belongs to the template build. The
 tracked template builder creates the OpenClaw config, workspace files, ACP
 adapter, start script, and ready script before publishing the E2B template.
 
-### 2. Start the gateway and ACP adapter on sandbox boot
+### 2. Use the snapshotted gateway and ACP adapter
 
 The sandbox should come up with the runtime gateway and ACP adapter already
-starting. On create or reconnect, the Go service should mainly wait for
-readiness.
+running from the E2B template snapshot. On create or reconnect, the Go service
+should not restart those processes unless recovery proves they are broken.
 
 The service path should become:
 
 ```text
-create/connect sandbox -> wait for gateway + adapter -> send ACP prompt
+create/connect sandbox -> write runtime files -> reload runtime secrets -> send ACP prompt
 ```
 
 It should not run a long configuration script for every recovered sandbox.
@@ -93,9 +113,16 @@ The E2B ready command should require:
 - ACP adapter `/healthz?ready=1` returns ready
 - expected workspace and config files exist
 
-The current ACP adapter readiness only initializes ACP. For the fastest first
-turn, readiness should also create or restore the default ACP session. Otherwise
-the first user message still pays `session/new` or session restore cost.
+OpenClaw's own readiness model matters here:
+
+- `/healthz` means the gateway HTTP process is live.
+- `/readyz` is stricter and waits for startup sidecars.
+- `chat.send` is not blocked by the startup sidecars that gate `/readyz`.
+- `secrets.reload` can refresh runtime secrets without restarting the gateway.
+
+For e2b-agents, the first Slack prompt does not need every OpenClaw sidecar to
+be ready. It needs the gateway process, ACP adapter, runtime secret files, and
+the `chat.send` path.
 
 Important constraint: environment variables passed to `Sandbox.create()` are not
 available to the E2B start command process because that process was started
@@ -111,25 +138,29 @@ Preferred secret flow:
    readiness server.
 2. e2b-agents creates the sandbox and passes or writes runtime secrets
    immediately after create.
-3. The already-running runtime reads secrets from the runtime secret source when
-   the first model request needs them.
-4. Readiness requires the gateway, adapter, ACP initialize, and default ACP
-   session prewarm. It does not require a model call.
+3. e2b-agents calls OpenClaw `secrets.reload` through the gateway/ACP sidecar.
+4. The already-running runtime reads secrets from the refreshed runtime secret
+   source when the first model request needs them.
+5. The first prompt goes directly to `/prompt`; the adapter may create or load
+   the ACP session as part of that request.
 
-Do not bake provider API keys into the template. If OpenClaw only reads provider
-secrets from process environment at startup, add a small runtime secret source
-that the model/provider config can resolve lazily instead of restarting the
-gateway on the user path.
+Do not bake provider API keys into the template. Do not restart OpenClaw just to
+pick up provider secrets. OpenClaw already has file-backed secret providers and a
+`secrets.reload` gateway method, so runtime secret updates should use that.
 
 Implementation status: the template starts OpenClaw and the ACP adapter. The
 gateway binds to loopback with no public auth surface. The ACP adapter is the
 public runtime surface and reads its bearer token from a file written after
 sandbox creation. The model provider key is also read from a file through
-OpenClaw's file secret provider. The service warms the exact Slack ACP session
-through `/healthz?ready=1&sessionKey=...` before sending the first prompt. The
-helper writes runtime ports, model config, bearer token, and provider secrets
-into sandbox-owned files, then restarts the supervised runtime so the sandbox
-uses the deployment config rather than template placeholders.
+OpenClaw's file secret provider. The helper writes runtime ports, model config,
+bearer token, and provider secrets into sandbox-owned files, calls OpenClaw
+`secrets.reload`, and verifies that the ACP adapter HTTP process is live. It
+does not restart the supervised runtime in the normal cold path when the
+requested model matches the template model. If the first prompt after ensure
+gets an availability-style failure, the gateway retries through a forced runtime
+recovery. If the already-running gateway or adapter is unavailable, or if a
+config-affecting model override differs from the template, restart or recreate
+the sandbox.
 
 ### 3. Keep a warm standby per Slack workspace
 

@@ -51,6 +51,7 @@ type EnsureRuntimeInput struct {
 	RequesterUserID string            `json:"requesterUserId"`
 	SessionKey      string            `json:"sessionKey"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
+	ForceRestart    bool              `json:"forceRestart,omitempty"`
 }
 
 type EnsureRuntimeOutput struct {

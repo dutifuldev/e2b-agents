@@ -40,7 +40,7 @@ Warm messages should normally avoid sandbox setup:
 Slack message -> DB lookup -> direct ACP adapter request -> Slack reply
 ```
 
-If the sandbox is expired, missing, or unreachable, the service recovers by ensuring a sandbox from the workspace template, starting the runtime gateway and ACP adapter, retrying the send once, and then updating the workspace row.
+If the sandbox is expired, missing, or unreachable, the service recovers by ensuring a sandbox from the workspace template, reloading runtime secrets into the snapshotted gateway, retrying the send once, and then updating the workspace row.
 
 ## Agent mapping
 
@@ -272,10 +272,13 @@ The Go service calls `runtime/e2b-helper/dist/helper.js` for sandbox ensure work
 
 1. Connects to the existing sandbox or creates one from the workspace template.
 2. Writes runtime identity and configuration files.
-3. Starts the OpenClaw gateway inside the sandbox.
-4. Writes and starts the ACP adapter script.
-5. Waits for gateway and adapter readiness.
-6. Returns the public gateway and ACP adapter URLs to the Go service.
+3. Reloads runtime secrets through the already-running gateway.
+4. Verifies that the ACP adapter HTTP process is live.
+5. Returns the public gateway and ACP adapter URLs to the Go service.
+
+The template owns process startup. The helper does not restart the runtime in the normal cold path; it only restarts as recovery when the snapshotted gateway or adapter is unavailable.
+
+If the first prompt after ensure reports an availability failure, the service forces one runtime recovery and resends the prompt.
 
 Warm sends do not run this ensure path. They use the cached adapter URL and call:
 
@@ -295,6 +298,7 @@ The adapter owns ACP initialization, session creation or loading, prompt seriali
 - Structured logs include `runtime_duration_ms`, `slack_post_duration_ms`, `database_update_duration_ms`, and `total_duration_ms` on successful Slack event handling.
 - Direct-send success is logged as `runtime direct send succeeded`.
 - Recovery is logged as `runtime direct send unavailable; ensuring runtime`, followed by `runtime ensure succeeded` and `runtime send after ensure succeeded`.
+- Post-ensure prompt recovery is logged as `runtime send after ensure unavailable; forcing runtime recovery`, followed by `runtime forced recovery ensure succeeded`.
 
 ## Reference docs
 

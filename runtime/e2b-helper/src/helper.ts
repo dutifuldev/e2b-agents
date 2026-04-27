@@ -1,5 +1,5 @@
 import { Sandbox } from "e2b";
-import { openClawConfig, runtimePaths } from "./templateFiles.js";
+import { defaultRuntimeModel, openClawConfig, runtimePaths } from "./templateFiles.js";
 
 type Envelope = {
   command: "ensure";
@@ -18,6 +18,12 @@ type EnsureInput = {
   requesterUserId: string;
   sessionKey: string;
   metadata?: Record<string, string>;
+  forceRestart?: boolean;
+};
+
+type ActiveRuntimeStatus = {
+  model: string;
+  error?: unknown;
 };
 
 async function main() {
@@ -39,6 +45,8 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
   const acpHost = runtime.sandbox.getHost(adapterPort(envelope));
   const acpBaseUrl = acpHost.startsWith("http") ? acpHost : `https://${acpHost}`;
 
+  const activeStatus = await checkActiveRuntimeBeforeConfigWrite(runtime.sandbox, envelope, runtime.created);
+
   const secretStart = Date.now();
   await writeRuntimeFiles(runtime.sandbox, envelope);
   logTiming("runtime helper secrets injected", {
@@ -47,22 +55,7 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     created: runtime.created,
   });
 
-  const restartStart = Date.now();
-  await requestRuntimeRestart(runtime.sandbox);
-  logTiming("runtime helper runtime restart requested", {
-    durationMs: durationMs(restartStart),
-    sandboxId: runtime.sandbox.sandboxId,
-    created: runtime.created,
-  });
-
-  const readyStart = Date.now();
-  await waitForACPAdapterReady(acpBaseUrl, input.sessionKey, envelope);
-  logTiming("runtime helper acp ready", {
-    durationMs: durationMs(readyStart),
-    sandboxId: runtime.sandbox.sandboxId,
-    sessionKey: input.sessionKey,
-    created: runtime.created,
-  });
+  await activateRuntime(runtime.sandbox, acpBaseUrl, input, envelope, runtime.created, activeStatus);
 
   const host = runtime.sandbox.getHost(envelope.gatewayPort);
   logTiming("runtime helper ensure completed", {
@@ -210,6 +203,189 @@ async function requestRuntimeRestart(sandbox: Sandbox) {
   );
 }
 
+async function activateRuntime(
+  sandbox: Sandbox,
+  acpBaseUrl: string,
+  input: EnsureInput,
+  envelope: Envelope,
+  created: boolean,
+  activeStatus: ActiveRuntimeStatus | undefined,
+) {
+  if (input.forceRestart) {
+    logTiming("runtime helper runtime restart required", {
+      sandboxId: sandbox.sandboxId,
+      created,
+      reason: "force_restart",
+    });
+    await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+    return;
+  }
+
+  if (created && templateModelDiffers(envelope)) {
+    logTiming("runtime helper runtime restart required", {
+      sandboxId: sandbox.sandboxId,
+      created,
+      reason: "model_differs_from_template",
+      model: envelope.model,
+    });
+    await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+    return;
+  }
+
+  try {
+    if (!created) {
+      if (activeStatus?.error) throw activeStatus.error;
+      const activeModel = activeStatus?.model || "";
+      if (!activeModel || activeModel !== requestedModelID(envelope.model)) {
+        logTiming("runtime helper runtime restart required", {
+          sandboxId: sandbox.sandboxId,
+          created,
+          reason: activeModel ? "active_model_differs_from_requested_model" : "active_model_unknown",
+          activeModel: activeModel || "",
+          requestedModel: requestedModelID(envelope.model),
+        });
+        await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+        return;
+      }
+    }
+
+    const reloadStart = Date.now();
+    await reloadRuntimeSecrets(sandbox, envelope);
+    logTiming("runtime helper secrets reloaded", {
+      durationMs: durationMs(reloadStart),
+      sandboxId: sandbox.sandboxId,
+      created,
+    });
+
+    const liveStart = Date.now();
+    await waitForACPAdapterLive(acpBaseUrl);
+    logTiming("runtime helper acp live", {
+      durationMs: durationMs(liveStart),
+      sandboxId: sandbox.sandboxId,
+      created,
+    });
+    return;
+  } catch (error) {
+    if (!isRuntimeProcessUnavailableError(error)) {
+      throw error;
+    }
+    logTiming("runtime helper snapshotted runtime unavailable", {
+      sandboxId: sandbox.sandboxId,
+      created,
+      error: errorMessage(error),
+    });
+  }
+
+  await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+}
+
+async function checkActiveRuntimeBeforeConfigWrite(sandbox: Sandbox, envelope: Envelope, created: boolean) {
+  if (created) return undefined;
+  const activeModelStart = Date.now();
+  try {
+    const activeModel = await activeRuntimeModel(sandbox, envelope);
+    logTiming("runtime helper active model checked", {
+      durationMs: durationMs(activeModelStart),
+      sandboxId: sandbox.sandboxId,
+      activeModel: activeModel || "",
+      requestedModel: requestedModelID(envelope.model),
+    });
+    return { model: activeModel };
+  } catch (error) {
+    logTiming("runtime helper active model check failed", {
+      durationMs: durationMs(activeModelStart),
+      sandboxId: sandbox.sandboxId,
+      error: errorMessage(error),
+    });
+    return { model: "", error };
+  }
+}
+
+async function restartRuntimeAndWait(
+  sandbox: Sandbox,
+  acpBaseUrl: string,
+  input: EnsureInput,
+  envelope: Envelope,
+  created: boolean,
+) {
+  const restartStart = Date.now();
+  await requestRuntimeRestart(sandbox);
+  logTiming("runtime helper runtime restart requested", {
+    durationMs: durationMs(restartStart),
+    sandboxId: sandbox.sandboxId,
+    created,
+    recovery: true,
+  });
+
+  const readyStart = Date.now();
+  await waitForACPAdapterReady(acpBaseUrl, input.sessionKey, envelope);
+  logTiming("runtime helper acp ready after restart", {
+    durationMs: durationMs(readyStart),
+    sandboxId: sandbox.sandboxId,
+    sessionKey: input.sessionKey,
+    created,
+    recovery: true,
+  });
+}
+
+function templateModelDiffers(envelope: Envelope) {
+  return requestedModelID(envelope.model) !== requestedModelID(defaultRuntimeModel);
+}
+
+function requestedModelID(model: string) {
+  const normalized = (model || defaultRuntimeModel).trim() || defaultRuntimeModel;
+  return normalized.startsWith("anthropic/") ? normalized.slice("anthropic/".length) : normalized;
+}
+
+async function activeRuntimeModel(sandbox: Sandbox, envelope: Envelope) {
+  const result = await runGatewayCommand(sandbox, envelope, "status");
+  const parsed = JSON.parse(result.stdout) as {
+    sessions?: {
+      defaults?: {
+        model?: unknown;
+      };
+    };
+  };
+  const model = parsed.sessions?.defaults?.model;
+  return typeof model === "string" && model.trim() ? requestedModelID(model) : "";
+}
+
+async function reloadRuntimeSecrets(sandbox: Sandbox, envelope: Envelope) {
+  await runGatewayCommand(sandbox, envelope, "secrets.reload");
+}
+
+async function runGatewayCommand(sandbox: Sandbox, envelope: Envelope, method: string) {
+  const gatewayPort = positivePort(envelope.gatewayPort, 18789);
+  const script = [
+    "export HOME=/home/user",
+    `export OPENCLAW_STATE_DIR=${runtimePaths.stateDir}`,
+    `export OPENCLAW_CONFIG_PATH=${runtimePaths.config}`,
+    `export OPENCLAW_GATEWAY_TOKEN=${shellSingleQuote(envelope.gatewayToken)}`,
+    `openclaw gateway call ${method} --url ws://127.0.0.1:${gatewayPort} --token "$OPENCLAW_GATEWAY_TOKEN" --timeout 10000 --json`,
+  ].join(" && ");
+  return await sandbox.commands.run(["bash -lc", shellSingleQuote(script)].join(" "), {
+    requestTimeoutMs: 20_000,
+  });
+}
+
+async function waitForACPAdapterLive(baseURL: string) {
+  const deadline = Date.now() + 10_000;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${baseURL.replace(/\/+$/, "")}/healthz`);
+      if (response.ok) {
+        return;
+      }
+      lastError = `HTTP ${response.status}: ${await response.text()}`;
+    } catch (error) {
+      lastError = errorMessage(error);
+    }
+    await sleep(250);
+  }
+  throw new Error(`runtime ACP adapter is not live: ${redact(lastError)}`);
+}
+
 async function waitForACPAdapterReady(baseURL: string, sessionKey: string, envelope: Envelope) {
   const deadline = Date.now() + 90_000;
   let lastError = "";
@@ -253,6 +429,30 @@ function durationMs(startMs: number) {
 
 function errorMessage(error: unknown) {
   return redact(error instanceof Error ? error.message : String(error));
+}
+
+function isRuntimeProcessUnavailableError(error: unknown) {
+  const message = errorMessage(error).toLowerCase();
+  return [
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "econnrefused",
+    "econnreset",
+    "etimedout",
+    "timed out",
+    "timeout",
+    "gateway is closed",
+    "gateway closed",
+    "websocket",
+    "fetch failed",
+    "failed to fetch",
+    "runtime acp adapter is not live",
+    "http 502",
+    "http 503",
+    "404",
+    "410",
+  ].some((pattern) => message.includes(pattern));
 }
 
 function logTiming(msg: string, fields: Record<string, unknown>) {

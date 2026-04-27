@@ -385,7 +385,7 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 		"last_error":   "",
 	})
 	ensureStart := time.Now()
-	ensure, err := s.runtime.Ensure(ctx, EnsureRuntimeInput{
+	ensureInput := EnsureRuntimeInput{
 		SandboxID:       workspace.CurrentSandboxID,
 		TemplateID:      workspace.TemplateID,
 		TeamID:          workspace.TeamID,
@@ -399,7 +399,8 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 			"slackTeamId":    workspace.SlackTeamID,
 			"slackChannelId": channelID,
 		},
-	})
+	}
+	ensure, err := s.runtime.Ensure(ctx, ensureInput)
 	if err != nil {
 		return MessageReply{}, err
 	}
@@ -422,7 +423,46 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 		SessionKey: ensure.SessionKey,
 	})
 	if err != nil {
-		return MessageReply{}, err
+		if !isRuntimeUnavailableError(err) {
+			return MessageReply{}, err
+		}
+		slog.Warn("runtime send after ensure unavailable; forcing runtime recovery",
+			"workspace_id", workspace.ID,
+			"slack_team_id", workspace.SlackTeamID,
+			"slack_channel_id", channelID,
+			"sandbox_id", ensure.SandboxID,
+			"session_id", ensure.SessionKey,
+			"duration_ms", time.Since(sendStart).Milliseconds(),
+			"error", err,
+		)
+		ensureInput.SandboxID = ensure.SandboxID
+		ensureInput.ForceRestart = true
+		recoveryStart := time.Now()
+		ensure, err = s.runtime.Ensure(ctx, ensureInput)
+		if err != nil {
+			return MessageReply{}, err
+		}
+		slog.Info("runtime forced recovery ensure succeeded",
+			"workspace_id", workspace.ID,
+			"slack_team_id", workspace.SlackTeamID,
+			"slack_channel_id", channelID,
+			"sandbox_id", ensure.SandboxID,
+			"session_id", ensure.SessionKey,
+			"duration_ms", time.Since(recoveryStart).Milliseconds(),
+		)
+		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
+			"setup_status":       SetupStatusWaitingReady,
+			"current_sandbox_id": ensure.SandboxID,
+		})
+		sendStart = time.Now()
+		send, err = s.runtime.Send(ctx, SendRuntimeInput{
+			SandboxID:  ensure.SandboxID,
+			Prompt:     text,
+			SessionKey: ensure.SessionKey,
+		})
+		if err != nil {
+			return MessageReply{}, err
+		}
 	}
 	sessionID := firstNonEmpty(send.SessionKey, ensure.SessionKey)
 	slog.Info("runtime send after ensure succeeded",
