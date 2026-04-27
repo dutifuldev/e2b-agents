@@ -32,6 +32,11 @@ The helper now keeps that benefit in the normal cold path. After
 checks that the ACP adapter HTTP process is live, and then sends the prompt
 without restarting OpenClaw.
 
+If the first prompt after that fast ensure returns an availability-style error,
+the gateway forces one runtime recovery and resends the same prompt. This keeps
+the normal path short while still handling a snapshotted adapter that is
+listening but cannot yet complete the ACP prompt path.
+
 This assumes the runtime model matches the model baked into the template. If the
 deployment requests a different model, the helper restarts the runtime so
 OpenClaw reads the new config instead of silently serving the template config.
@@ -150,9 +155,11 @@ OpenClaw's file secret provider. The helper writes runtime ports, model config,
 bearer token, and provider secrets into sandbox-owned files, calls OpenClaw
 `secrets.reload`, and verifies that the ACP adapter HTTP process is live. It
 does not restart the supervised runtime in the normal cold path when the
-requested model matches the template model. If the already-running gateway or
-adapter is unavailable, or if a config-affecting model override differs from the
-template, restart or recreate the sandbox.
+requested model matches the template model. If the first prompt after ensure
+gets an availability-style failure, the gateway retries through a forced runtime
+recovery. If the already-running gateway or adapter is unavailable, or if a
+config-affecting model override differs from the template, restart or recreate
+the sandbox.
 
 ### 3. Keep a warm standby per Slack workspace
 

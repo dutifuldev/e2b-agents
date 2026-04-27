@@ -18,6 +18,7 @@ type EnsureInput = {
   requesterUserId: string;
   sessionKey: string;
   metadata?: Record<string, string>;
+  forceRestart?: boolean;
 };
 
 async function main() {
@@ -202,6 +203,16 @@ async function activateRuntime(
   envelope: Envelope,
   created: boolean,
 ) {
+  if (input.forceRestart) {
+    logTiming("runtime helper runtime restart required", {
+      sandboxId: sandbox.sandboxId,
+      created,
+      reason: "force_restart",
+    });
+    await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+    return;
+  }
+
   if (templateModelDiffers(envelope)) {
     logTiming("runtime helper runtime restart required", {
       sandboxId: sandbox.sandboxId,

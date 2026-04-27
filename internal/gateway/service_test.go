@@ -355,6 +355,71 @@ func TestHandleSlackEnvelopeDoesNotRecoverNonAvailabilityError(t *testing.T) {
 	}
 }
 
+func TestHandleSlackEnvelopeForcesRecoveryWhenSendAfterEnsureIsUnavailable(t *testing.T) {
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-recovered",
+			TemplateID: "openclaw",
+			Host:       "localhost",
+			BaseURL:    "http://localhost",
+			SessionKey: "slack-v1-T123-C123-channel",
+		},
+		sendErrs: []error{errors.New("runtime adapter HTTP 503: ACP request timed out")},
+	}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	workspace, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	})
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := workspaces.UpdateAfterMessage(context.Background(), workspace.ID, map[string]any{
+		"bot_token_ref": "",
+		"setup_status":  SetupStatusReady,
+	}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+
+	envelope := SlackEventEnvelope{
+		TeamID:  "T123",
+		EventID: "EvEnsureRecover",
+		Event: SlackEvent{
+			Type:        "app_mention",
+			ChannelType: "channel",
+			Channel:     "C123",
+			User:        "U123",
+			Text:        "<@BOT> hello",
+			TS:          "1777220000.000100",
+		},
+	}
+	if err := service.handleSlackEnvelope(context.Background(), envelope); err != nil {
+		t.Fatalf("handleSlackEnvelope() returned error: %v", err)
+	}
+	if len(runtime.ensureCalls) != 2 {
+		t.Fatalf("Ensure calls = %d, want 2", len(runtime.ensureCalls))
+	}
+	if runtime.ensureCalls[0].ForceRestart {
+		t.Fatal("first Ensure forced restart, want fast path")
+	}
+	if !runtime.ensureCalls[1].ForceRestart {
+		t.Fatal("second Ensure did not force restart")
+	}
+	if len(runtime.sendCalls) != 2 {
+		t.Fatalf("Send calls = %d, want 2", len(runtime.sendCalls))
+	}
+	for i, send := range runtime.sendCalls {
+		if send.SandboxID != "sandbox-recovered" {
+			t.Fatalf("Send[%d] sandbox = %q, want sandbox-recovered", i, send.SandboxID)
+		}
+		if send.SessionKey != "slack-v1-T123-C123-channel" {
+			t.Fatalf("Send[%d] session = %q, want channel session", i, send.SessionKey)
+		}
+	}
+}
+
 func TestHandleSlackEnvelopeDedupesConcurrentRetry(t *testing.T) {
 	runtime := &fakeRuntime{
 		ensureOutput: EnsureRuntimeOutput{

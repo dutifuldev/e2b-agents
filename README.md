@@ -278,6 +278,8 @@ The Go service calls `runtime/e2b-helper/dist/helper.js` for sandbox ensure work
 
 The template owns process startup. The helper does not restart the runtime in the normal cold path; it only restarts as recovery when the snapshotted gateway or adapter is unavailable.
 
+If the first prompt after ensure reports an availability failure, the service forces one runtime recovery and resends the prompt.
+
 Warm sends do not run this ensure path. They use the cached adapter URL and call:
 
 ```text
@@ -296,6 +298,7 @@ The adapter owns ACP initialization, session creation or loading, prompt seriali
 - Structured logs include `runtime_duration_ms`, `slack_post_duration_ms`, `database_update_duration_ms`, and `total_duration_ms` on successful Slack event handling.
 - Direct-send success is logged as `runtime direct send succeeded`.
 - Recovery is logged as `runtime direct send unavailable; ensuring runtime`, followed by `runtime ensure succeeded` and `runtime send after ensure succeeded`.
+- Post-ensure prompt recovery is logged as `runtime send after ensure unavailable; forcing runtime recovery`, followed by `runtime forced recovery ensure succeeded`.
 
 ## Reference docs
 
