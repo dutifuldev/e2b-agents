@@ -50,7 +50,7 @@ function normalizeText(text) {
 function startAgent() {
   if (child && !child.killed && child.exitCode === null && child.signalCode === null) return;
   const [bin, ...args] = command;
-  log("acp bridge starting harness", { command: bin, args: redactCommandArgs(args) });
+  log("acp bridge starting harness", { command: bin, args: commandLogArgs(args) });
   child = spawn(bin, args, {
     cwd,
     env: process.env,
@@ -378,7 +378,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  log("acp bridge listening", { port, cwd, command: redactCommandArgs(command) });
+  log("acp bridge listening", { port, cwd, command: commandLogArgs(command) });
 });
 
 process.on("SIGTERM", () => {
@@ -387,11 +387,8 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-function redactCommandArgs(args) {
-  return args.map((arg, index) => {
-    if (index > 0 && args[index - 1] === "--token") return "[redacted]";
-    return arg;
-  });
+function commandLogArgs(args) {
+  return args;
 }
 `;
 }

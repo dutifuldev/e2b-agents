@@ -225,12 +225,11 @@ async function configureACPAdapter(sandbox: Sandbox, envelope: Envelope, baseEnv
     "acp",
     "--url",
     `ws://127.0.0.1:${envelope.gatewayPort}`,
-    "--token",
-    envelope.gatewayToken,
     "--no-prefix-cwd",
   ];
   const adapterEnvs = {
     ...baseEnvs,
+    OPENCLAW_GATEWAY_TOKEN: envelope.gatewayToken,
     E2B_AGENTS_ACP_ADAPTER_PORT: String(adapterPort(envelope)),
     E2B_AGENTS_ACP_AUTH_TOKEN: envelope.gatewayToken,
     E2B_AGENTS_ACP_CWD: "/home/user/.openclaw/workspace",
