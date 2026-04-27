@@ -4,7 +4,7 @@
 
 `e2b-agents` connects Slack workspaces to long-lived E2B sandbox runtimes. The service receives Slack events, resolves the workspace, creates or reuses the workspace's current sandbox, sends the message to the runtime through an ACP adapter, and posts the final assistant reply back to Slack.
 
-The current production runtime packages OpenClaw in an E2B template. The gateway treats the sandbox as the agent instance and the E2B template as the agent image.
+The gateway treats the sandbox as the agent instance and the E2B template as the agent image. Runtime-specific behavior stays inside templates and adapters.
 
 - **Slack gateway**: verifies Slack signatures, handles install callbacks and event delivery, and posts replies.
 - **E2B runtime lifecycle**: creates, reconnects, and refreshes sandboxes from configured templates.
@@ -16,7 +16,7 @@ The current production runtime packages OpenClaw in an E2B template. The gateway
 - **Operational logs**: emits structured `slog` JSON with timing for runtime, Slack post, and database update stages.
 - **Development CLI**: includes commands for workspace setup, direct message testing, migrations, and Slack auth checks.
 
-## Production flow
+## Message Flow
 
 ```text
 Slack event
