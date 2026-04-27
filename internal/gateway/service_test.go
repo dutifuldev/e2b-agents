@@ -5,12 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/dutifuldev/e2b-agents/internal/database"
 	"gorm.io/gorm"
@@ -36,6 +33,7 @@ func testSlackClient() *SlackClient {
 }
 
 type fakeRuntime struct {
+	mu           sync.Mutex
 	ensureCalls  []EnsureRuntimeInput
 	sendCalls    []SendRuntimeInput
 	ensureOutput EnsureRuntimeOutput
@@ -45,11 +43,15 @@ type fakeRuntime struct {
 }
 
 func (r *fakeRuntime) Ensure(_ context.Context, input EnsureRuntimeInput) (EnsureRuntimeOutput, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.ensureCalls = append(r.ensureCalls, input)
 	return r.ensureOutput, r.ensureErr
 }
 
 func (r *fakeRuntime) Send(_ context.Context, input SendRuntimeInput) (SendRuntimeOutput, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.sendCalls = append(r.sendCalls, input)
 	callIndex := len(r.sendCalls) - 1
 	if callIndex < len(r.sendErrs) && r.sendErrs[callIndex] != nil {
@@ -59,6 +61,18 @@ func (r *fakeRuntime) Send(_ context.Context, input SendRuntimeInput) (SendRunti
 		return r.sendOutputs[callIndex], nil
 	}
 	return SendRuntimeOutput{Text: "ok", SessionKey: input.SessionKey}, nil
+}
+
+func (r *fakeRuntime) ensureCallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ensureCalls)
+}
+
+func (r *fakeRuntime) sendCallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.sendCalls)
 }
 
 func newTestGatewayService(t *testing.T, runtime Runtime) (*Service, *gorm.DB) {
@@ -266,50 +280,17 @@ func TestHandleSlackEnvelopeDoesNotRecoverNonAvailabilityError(t *testing.T) {
 }
 
 func TestHandleSlackEnvelopeDedupesConcurrentRetry(t *testing.T) {
-	tmp := t.TempDir()
-	countPath := filepath.Join(tmp, "send-count")
-	scriptPath := filepath.Join(tmp, "runtime.sh")
-	script := `#!/bin/sh
-payload=$(cat)
-case "$payload" in
-*'"command":"ensure"'*)
-  printf '{"sandboxId":"sandbox-1","templateId":"openclaw","host":"localhost","baseUrl":"http://localhost","sessionKey":"session-1"}'
-  ;;
-*'"command":"send"'*)
-  sleep 0.1
-  printf x >> "` + countPath + `"
-  printf '{"text":"ok","sessionKey":"session-1"}'
-  ;;
-*)
-  printf 'unknown command' >&2
-  exit 1
-  ;;
-esac
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write runtime script: %v", err)
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-1",
+			TemplateID: "openclaw",
+			Host:       "localhost",
+			BaseURL:    "http://localhost",
+			SessionKey: "session-1",
+		},
+		sendOutputs: []SendRuntimeOutput{{Text: "ok", SessionKey: "session-1"}},
 	}
-
-	db, err := database.Open(":memory:", database.PoolConfig{MaxOpenConns: 1})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := database.ApplyTestSchema(db); err != nil {
-		t.Fatalf("apply test schema: %v", err)
-	}
-
-	service := NewService(db, Options{
-		Runtime: NewRuntimeClient(RuntimeOptions{
-			NodePath:     "/bin/sh",
-			ScriptPath:   scriptPath,
-			APIKey:       "test-e2b-key",
-			AnthropicKey: "test-anthropic-key",
-			Timeout:      time.Minute,
-		}),
-		AutoCreate:      true,
-		DefaultTeamID:   "default",
-		DefaultTemplate: "openclaw",
-	})
+	service, _ := newTestGatewayService(t, runtime)
 
 	envelope := SlackEventEnvelope{
 		TeamID:  "T123",
@@ -336,59 +317,26 @@ esac
 	}
 	wg.Wait()
 
-	count, err := os.ReadFile(countPath)
-	if err != nil {
-		t.Fatalf("read send count: %v", err)
-	}
-	if got := string(count); got != "x" {
-		t.Fatalf("runtime send count = %q, want one send", got)
+	if got := runtime.sendCallCount(); got != 1 {
+		t.Fatalf("runtime send count = %d, want one", got)
 	}
 }
 
 func TestHandleSlackEnvelopeRemembersOlderProcessedEvents(t *testing.T) {
-	tmp := t.TempDir()
-	countPath := filepath.Join(tmp, "send-count")
-	scriptPath := filepath.Join(tmp, "runtime.sh")
-	script := `#!/bin/sh
-payload=$(cat)
-case "$payload" in
-*'"command":"ensure"'*)
-  printf '{"sandboxId":"sandbox-1","templateId":"openclaw","host":"localhost","baseUrl":"http://localhost","sessionKey":"session-1"}'
-  ;;
-*'"command":"send"'*)
-  printf x >> "` + countPath + `"
-  printf '{"text":"ok","sessionKey":"session-1"}'
-  ;;
-*)
-  printf 'unknown command' >&2
-  exit 1
-  ;;
-esac
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write runtime script: %v", err)
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-1",
+			TemplateID: "openclaw",
+			Host:       "localhost",
+			BaseURL:    "http://localhost",
+			SessionKey: "session-1",
+		},
+		sendOutputs: []SendRuntimeOutput{
+			{Text: "ok", SessionKey: "session-1"},
+			{Text: "ok", SessionKey: "session-1"},
+		},
 	}
-
-	db, err := database.Open(":memory:", database.PoolConfig{MaxOpenConns: 1})
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-	if err := database.ApplyTestSchema(db); err != nil {
-		t.Fatalf("apply test schema: %v", err)
-	}
-
-	service := NewService(db, Options{
-		Runtime: NewRuntimeClient(RuntimeOptions{
-			NodePath:     "/bin/sh",
-			ScriptPath:   scriptPath,
-			APIKey:       "test-e2b-key",
-			AnthropicKey: "test-anthropic-key",
-			Timeout:      time.Minute,
-		}),
-		AutoCreate:      true,
-		DefaultTeamID:   "default",
-		DefaultTemplate: "openclaw",
-	})
+	service, _ := newTestGatewayService(t, runtime)
 
 	first := SlackEventEnvelope{
 		TeamID:  "T123",
@@ -417,39 +365,12 @@ esac
 		t.Fatalf("handle retried first event: %v", err)
 	}
 
-	count, err := os.ReadFile(countPath)
-	if err != nil {
-		t.Fatalf("read send count: %v", err)
-	}
-	if got := string(count); got != "xx" {
-		t.Fatalf("runtime send count = %q, want two sends", got)
+	if got := runtime.sendCallCount(); got != 2 {
+		t.Fatalf("runtime send count = %d, want two", got)
 	}
 }
 
 func TestHandleSlackEnvelopeRespondsToDirectMention(t *testing.T) {
-	tmp := t.TempDir()
-	countPath := filepath.Join(tmp, "send-count")
-	scriptPath := filepath.Join(tmp, "runtime.sh")
-	script := `#!/bin/sh
-payload=$(cat)
-case "$payload" in
-*'"command":"ensure"'*)
-  printf '{"sandboxId":"sandbox-1","templateId":"openclaw","host":"localhost","baseUrl":"http://localhost","sessionKey":"session-1"}'
-  ;;
-*'"command":"send"'*)
-  printf x >> "` + countPath + `"
-  printf '{"text":"ok","sessionKey":"session-1"}'
-  ;;
-*)
-  printf 'unknown command' >&2
-  exit 1
-  ;;
-esac
-`
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write runtime script: %v", err)
-	}
-
 	db, err := database.Open(":memory:", database.PoolConfig{MaxOpenConns: 1})
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -467,14 +388,18 @@ esac
 		t.Fatalf("ensure workspace: %v", err)
 	}
 
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-1",
+			TemplateID: "openclaw",
+			Host:       "localhost",
+			BaseURL:    "http://localhost",
+			SessionKey: "session-1",
+		},
+		sendOutputs: []SendRuntimeOutput{{Text: "ok", SessionKey: "session-1"}},
+	}
 	service := NewService(db, Options{
-		Runtime: NewRuntimeClient(RuntimeOptions{
-			NodePath:     "/bin/sh",
-			ScriptPath:   scriptPath,
-			APIKey:       "test-e2b-key",
-			AnthropicKey: "test-anthropic-key",
-			Timeout:      time.Minute,
-		}),
+		Runtime:         runtime,
 		AutoCreate:      true,
 		DefaultTeamID:   "default",
 		DefaultTemplate: "openclaw",
@@ -496,11 +421,7 @@ esac
 		t.Fatalf("handleSlackEnvelope() returned error: %v", err)
 	}
 
-	count, err := os.ReadFile(countPath)
-	if err != nil {
-		t.Fatalf("read send count: %v", err)
-	}
-	if got := string(count); got != "x" {
-		t.Fatalf("runtime send count = %q, want one send", got)
+	if got := runtime.sendCallCount(); got != 1 {
+		t.Fatalf("runtime send count = %d, want one", got)
 	}
 }

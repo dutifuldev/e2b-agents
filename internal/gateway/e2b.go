@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,9 +22,13 @@ type RuntimeClient struct {
 	anthropicKey   string
 	model          string
 	gatewayPort    int
+	adapterPort    int
 	gatewayToken   string
 	timeout        time.Duration
 	requestTimeout time.Duration
+	httpClient     *http.Client
+	cacheMu        sync.RWMutex
+	endpoints      map[string]runtimeEndpoint
 }
 
 type RuntimeOptions struct {
@@ -31,6 +38,7 @@ type RuntimeOptions struct {
 	AnthropicKey   string
 	Model          string
 	GatewayPort    int
+	AdapterPort    int
 	GatewayToken   string
 	Timeout        time.Duration
 	RequestTimeout time.Duration
@@ -50,6 +58,8 @@ type EnsureRuntimeOutput struct {
 	TemplateID string `json:"templateId"`
 	Host       string `json:"host"`
 	BaseURL    string `json:"baseUrl"`
+	ACPHost    string `json:"acpHost,omitempty"`
+	ACPBaseURL string `json:"acpBaseUrl,omitempty"`
 	SessionKey string `json:"sessionKey"`
 }
 
@@ -60,8 +70,14 @@ type SendRuntimeInput struct {
 }
 
 type SendRuntimeOutput struct {
-	Text       string `json:"text"`
-	SessionKey string `json:"sessionKey"`
+	Text         string `json:"text"`
+	SessionKey   string `json:"sessionKey"`
+	ACPSessionID string `json:"acpSessionId,omitempty"`
+}
+
+type runtimeEndpoint struct {
+	ACPBaseURL string
+	UpdatedAt  time.Time
 }
 
 func NewRuntimeClient(opts RuntimeOptions) *RuntimeClient {
@@ -74,6 +90,9 @@ func NewRuntimeClient(opts RuntimeOptions) *RuntimeClient {
 	if opts.GatewayPort <= 0 {
 		opts.GatewayPort = 18789
 	}
+	if opts.AdapterPort <= 0 {
+		opts.AdapterPort = opts.GatewayPort + 1
+	}
 	if opts.RequestTimeout <= 0 {
 		opts.RequestTimeout = 5 * time.Minute
 	}
@@ -84,23 +103,89 @@ func NewRuntimeClient(opts RuntimeOptions) *RuntimeClient {
 		anthropicKey:   opts.AnthropicKey,
 		model:          opts.Model,
 		gatewayPort:    opts.GatewayPort,
+		adapterPort:    opts.AdapterPort,
 		gatewayToken:   opts.GatewayToken,
 		timeout:        opts.Timeout,
 		requestTimeout: opts.RequestTimeout,
+		httpClient:     &http.Client{Timeout: opts.RequestTimeout},
+		endpoints:      map[string]runtimeEndpoint{},
 	}
 }
 
 func (c *RuntimeClient) Ensure(ctx context.Context, input EnsureRuntimeInput) (EnsureRuntimeOutput, error) {
 	var out EnsureRuntimeOutput
 	err := c.run(ctx, "ensure", input, &out)
+	if err == nil {
+		c.rememberEndpoint(out)
+	}
 	return out, err
 }
 
 func (c *RuntimeClient) Send(ctx context.Context, input SendRuntimeInput) (SendRuntimeOutput, error) {
+	if strings.TrimSpace(input.SandboxID) == "" {
+		return SendRuntimeOutput{}, errors.New("sandboxId is required")
+	}
+	if strings.TrimSpace(input.SessionKey) == "" {
+		return SendRuntimeOutput{}, errors.New("sessionKey is required")
+	}
+	if strings.TrimSpace(input.Prompt) == "" {
+		return SendRuntimeOutput{}, errors.New("prompt is required")
+	}
+	endpoint, ok := c.endpoint(input.SandboxID)
+	if !ok {
+		return SendRuntimeOutput{}, fmt.Errorf("runtime adapter endpoint not cached for sandbox %s", input.SandboxID)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, c.requestTimeout)
+	defer cancel()
+
+	payload, err := json.Marshal(map[string]any{
+		"prompt":     input.Prompt,
+		"sessionKey": input.SessionKey,
+	})
+	if err != nil {
+		return SendRuntimeOutput{}, err
+	}
+	url := strings.TrimRight(endpoint.ACPBaseURL, "/") + "/prompt"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return SendRuntimeOutput{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.gatewayToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return SendRuntimeOutput{}, err
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if readErr != nil {
+		return SendRuntimeOutput{}, readErr
+	}
+	slog.Info("runtime acp adapter request completed",
+		"sandbox_id", input.SandboxID,
+		"session_id", input.SessionKey,
+		"status", resp.StatusCode,
+		"duration_ms", time.Since(start).Milliseconds(),
+		"response_bytes", len(body),
+	)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return SendRuntimeOutput{}, fmt.Errorf("runtime adapter HTTP %d: %s", resp.StatusCode, sanitizeHelperError(string(body)))
+	}
 	var out SendRuntimeOutput
-	err := c.run(ctx, "send", input, &out)
+	if err := json.Unmarshal(body, &out); err != nil {
+		return SendRuntimeOutput{}, fmt.Errorf("decode runtime adapter response: %w", err)
+	}
 	out.Text = NormalizeSlackText(out.Text)
-	return out, err
+	if strings.TrimSpace(out.Text) == "" {
+		return SendRuntimeOutput{}, errors.New("runtime adapter returned an empty reply")
+	}
+	if strings.TrimSpace(out.SessionKey) == "" {
+		out.SessionKey = input.SessionKey
+	}
+	return out, nil
 }
 
 func (c *RuntimeClient) run(ctx context.Context, command string, input any, out any) error {
@@ -121,6 +206,7 @@ func (c *RuntimeClient) run(ctx context.Context, command string, input any, out 
 		"input":            input,
 		"model":            c.model,
 		"gatewayPort":      c.gatewayPort,
+		"adapterPort":      c.adapterPort,
 		"gatewayToken":     c.gatewayToken,
 		"sandboxTimeoutMs": int64(c.timeout / time.Millisecond),
 	}
@@ -165,6 +251,27 @@ func (c *RuntimeClient) run(ctx context.Context, command string, input any, out 
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 	return nil
+}
+
+func (c *RuntimeClient) rememberEndpoint(out EnsureRuntimeOutput) {
+	sandboxID := strings.TrimSpace(out.SandboxID)
+	baseURL := strings.TrimSpace(out.ACPBaseURL)
+	if sandboxID == "" || baseURL == "" {
+		return
+	}
+	c.cacheMu.Lock()
+	c.endpoints[sandboxID] = runtimeEndpoint{
+		ACPBaseURL: baseURL,
+		UpdatedAt:  time.Now().UTC(),
+	}
+	c.cacheMu.Unlock()
+}
+
+func (c *RuntimeClient) endpoint(sandboxID string) (runtimeEndpoint, bool) {
+	c.cacheMu.RLock()
+	endpoint, ok := c.endpoints[strings.TrimSpace(sandboxID)]
+	c.cacheMu.RUnlock()
+	return endpoint, ok
 }
 
 func sanitizeHelperError(msg string) string {

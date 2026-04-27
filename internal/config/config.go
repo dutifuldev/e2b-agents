@@ -34,6 +34,7 @@ type Config struct {
 	E2BHelperNode            string
 	E2BHelperScript          string
 	OpenClawGatewayPort      int
+	ACPAdapterPort           int
 	OpenClawGatewayToken     string
 	SandboxTimeout           time.Duration
 	SandboxRequestTimeout    time.Duration
@@ -72,6 +73,7 @@ func Load() Config {
 		E2BHelperNode:            getenvDefault("E2B_HELPER_NODE", "node"),
 		E2BHelperScript:          getenvDefault("E2B_HELPER_SCRIPT", filepath.Join("runtime", "e2b-helper", "dist", "helper.js")),
 		OpenClawGatewayPort:      intDefault("OPENCLAW_GATEWAY_PORT", 18789),
+		ACPAdapterPort:           intDefault("E2B_AGENTS_ACP_ADAPTER_PORT", 18790),
 		OpenClawGatewayToken:     getenvDefault("OPENCLAW_GATEWAY_TOKEN", DefaultOpenClawGatewayToken),
 		SandboxTimeout:           durationDefault("E2B_SANDBOX_TIMEOUT", time.Hour),
 		SandboxRequestTimeout:    durationDefault("E2B_SANDBOX_REQUEST_TIMEOUT", 5*time.Minute),
@@ -109,6 +111,12 @@ func (c Config) ValidateServe() error {
 	}
 	if c.OpenClawGatewayPort <= 0 {
 		return errors.New("OPENCLAW_GATEWAY_PORT must be positive")
+	}
+	if c.ACPAdapterPort <= 0 {
+		return errors.New("E2B_AGENTS_ACP_ADAPTER_PORT must be positive")
+	}
+	if c.ACPAdapterPort == c.OpenClawGatewayPort {
+		return errors.New("E2B_AGENTS_ACP_ADAPTER_PORT must differ from OPENCLAW_GATEWAY_PORT")
 	}
 	if strings.TrimSpace(c.OpenClawGatewayToken) == "" || c.OpenClawGatewayToken == DefaultOpenClawGatewayToken {
 		return errors.New("OPENCLAW_GATEWAY_TOKEN must be set to a non-default secret")

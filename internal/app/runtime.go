@@ -42,6 +42,7 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 		AnthropicKey:   cfg.AnthropicAPIKey,
 		Model:          cfg.RuntimeModel,
 		GatewayPort:    cfg.OpenClawGatewayPort,
+		AdapterPort:    cfg.ACPAdapterPort,
 		GatewayToken:   cfg.OpenClawGatewayToken,
 		Timeout:        cfg.SandboxTimeout,
 		RequestTimeout: cfg.SandboxRequestTimeout,
