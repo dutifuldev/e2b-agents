@@ -17,7 +17,7 @@ import (
 type Service struct {
 	db                *gorm.DB
 	workspaces        *WorkspaceService
-	runtime           *RuntimeClient
+	runtime           Runtime
 	slack             *SlackClient
 	autoCreate        bool
 	defaultTeamID     string
@@ -30,7 +30,7 @@ type Service struct {
 const slackSessionKeyVersion = "v1"
 
 type Options struct {
-	Runtime           *RuntimeClient
+	Runtime           Runtime
 	Slack             *SlackClient
 	AutoCreate        bool
 	DefaultTeamID     string
@@ -50,6 +50,11 @@ type MessageReply struct {
 	Text      string
 	SandboxID string
 	SessionID string
+}
+
+type Runtime interface {
+	Ensure(context.Context, EnsureRuntimeInput) (EnsureRuntimeOutput, error)
+	Send(context.Context, SendRuntimeInput) (SendRuntimeOutput, error)
 }
 
 func NewService(db *gorm.DB, opts Options) *Service {
@@ -205,10 +210,54 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 	workspace = latest
 
 	sessionKey := slackSessionKey(workspace.SlackTeamID, channelID, messageTS)
+	if workspaceReadyForDirectSend(workspace) {
+		start := time.Now()
+		send, err := s.runtime.Send(ctx, SendRuntimeInput{
+			SandboxID:  workspace.CurrentSandboxID,
+			Prompt:     text,
+			SessionKey: sessionKey,
+		})
+		if err == nil {
+			slog.Info("runtime direct send succeeded",
+				"workspace_id", workspace.ID,
+				"slack_team_id", workspace.SlackTeamID,
+				"slack_channel_id", channelID,
+				"sandbox_id", workspace.CurrentSandboxID,
+				"session_id", firstNonEmpty(send.SessionKey, sessionKey),
+				"duration_ms", time.Since(start).Milliseconds(),
+			)
+			return MessageReply{
+				Text:      send.Text,
+				SandboxID: workspace.CurrentSandboxID,
+				SessionID: firstNonEmpty(send.SessionKey, sessionKey),
+			}, nil
+		}
+		if !isRuntimeUnavailableError(err) {
+			slog.Warn("runtime direct send failed without recovery",
+				"workspace_id", workspace.ID,
+				"slack_team_id", workspace.SlackTeamID,
+				"slack_channel_id", channelID,
+				"sandbox_id", workspace.CurrentSandboxID,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"error", err,
+			)
+			return MessageReply{}, err
+		}
+		slog.Warn("runtime direct send unavailable; ensuring runtime",
+			"workspace_id", workspace.ID,
+			"slack_team_id", workspace.SlackTeamID,
+			"slack_channel_id", channelID,
+			"sandbox_id", workspace.CurrentSandboxID,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"error", err,
+		)
+	}
+
 	_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"setup_status": SetupStatusCreatingSandbox,
 		"last_error":   "",
 	})
+	ensureStart := time.Now()
 	ensure, err := s.runtime.Ensure(ctx, EnsureRuntimeInput{
 		SandboxID:       workspace.CurrentSandboxID,
 		TemplateID:      workspace.TemplateID,
@@ -227,10 +276,19 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 	if err != nil {
 		return MessageReply{}, err
 	}
+	slog.Info("runtime ensure succeeded",
+		"workspace_id", workspace.ID,
+		"slack_team_id", workspace.SlackTeamID,
+		"slack_channel_id", channelID,
+		"sandbox_id", ensure.SandboxID,
+		"session_id", ensure.SessionKey,
+		"duration_ms", time.Since(ensureStart).Milliseconds(),
+	)
 	_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 		"setup_status":       SetupStatusWaitingReady,
 		"current_sandbox_id": ensure.SandboxID,
 	})
+	sendStart := time.Now()
 	send, err := s.runtime.Send(ctx, SendRuntimeInput{
 		SandboxID:  ensure.SandboxID,
 		Prompt:     text,
@@ -239,11 +297,62 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 	if err != nil {
 		return MessageReply{}, err
 	}
+	sessionID := firstNonEmpty(send.SessionKey, ensure.SessionKey)
+	slog.Info("runtime send after ensure succeeded",
+		"workspace_id", workspace.ID,
+		"slack_team_id", workspace.SlackTeamID,
+		"slack_channel_id", channelID,
+		"sandbox_id", ensure.SandboxID,
+		"session_id", sessionID,
+		"duration_ms", time.Since(sendStart).Milliseconds(),
+	)
 	return MessageReply{
 		Text:      send.Text,
 		SandboxID: ensure.SandboxID,
-		SessionID: send.SessionKey,
+		SessionID: sessionID,
 	}, nil
+}
+
+func workspaceReadyForDirectSend(workspace database.SlackWorkspace) bool {
+	return workspace.SetupStatus == SetupStatusReady && strings.TrimSpace(workspace.CurrentSandboxID) != ""
+}
+
+func isRuntimeUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, pattern := range []string{
+		"not found",
+		"expired",
+		"does not exist",
+		"connection refused",
+		"connection reset",
+		"connection aborted",
+		"network is unreachable",
+		"no such host",
+		"fetch failed",
+		"gateway not reachable",
+		"runtime gateway did not become ready",
+		"connect timeout",
+		"connect timed out",
+		"i/o timeout",
+		"econnrefused",
+		"econnreset",
+		"enotfound",
+		"etimedout",
+	} {
+		if strings.Contains(msg, pattern) {
+			return true
+		}
+	}
+	if strings.Contains(msg, "runtime http 502") || strings.Contains(msg, "runtime http 503") {
+		return true
+	}
+	if strings.Contains(msg, "sandbox") && (strings.Contains(msg, "404") || strings.Contains(msg, "410")) {
+		return true
+	}
+	return false
 }
 
 func (s *Service) lockWorkspace(workspaceID string) func() {
