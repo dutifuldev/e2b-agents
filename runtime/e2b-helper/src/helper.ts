@@ -443,6 +443,7 @@ function isRuntimeProcessUnavailableError(error: unknown) {
     "timed out",
     "timeout",
     "gateway is closed",
+    "gateway closed",
     "websocket",
     "fetch failed",
     "failed to fetch",
