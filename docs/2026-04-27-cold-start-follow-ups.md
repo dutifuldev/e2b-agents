@@ -126,7 +126,10 @@ gateway binds to loopback with no public auth surface. The ACP adapter is the
 public runtime surface and reads its bearer token from a file written after
 sandbox creation. The model provider key is also read from a file through
 OpenClaw's file secret provider. The service warms the exact Slack ACP session
-through `/healthz?ready=1&sessionKey=...` before sending the first prompt.
+through `/healthz?ready=1&sessionKey=...` before sending the first prompt. The
+helper writes runtime ports, model config, bearer token, and provider secrets
+into sandbox-owned files, then restarts the supervised runtime so the sandbox
+uses the deployment config rather than template placeholders.
 
 ### 3. Keep a warm standby per Slack workspace
 
@@ -141,6 +144,11 @@ Preferred direction:
 - update the workspace pointer only after the replacement is ready
 
 This keeps most user-visible traffic on the warm path.
+
+Implementation status: service startup now prewarms every ready workspace with
+a current sandbox ID. That hydrates the in-process ACP endpoint cache and warms
+the stored ACP session before the HTTP server accepts Slack traffic after a
+deploy or process restart.
 
 ### 4. Add a production timing check
 

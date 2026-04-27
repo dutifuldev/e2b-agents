@@ -1,6 +1,7 @@
 export const runtimePaths = {
   acpAdapter: "/home/user/.e2b-agents/acp-adapter.mjs",
   authToken: "/home/user/.e2b-agents/auth/token",
+  runtimeEnv: "/home/user/.e2b-agents/runtime.env",
   secrets: "/home/user/.e2b-agents/secrets/openclaw-secrets.json",
   sessionStore: "/home/user/.e2b-agents/acp-sessions.json",
   stateDir: "/home/user/.openclaw",
@@ -8,11 +9,13 @@ export const runtimePaths = {
   config: "/home/user/.openclaw/openclaw.json",
 };
 
+export const defaultRuntimeModel = "anthropic/claude-sonnet-4-6";
+
 export function templateAssetFiles() {
   return {
     "start-runtime.sh": startRuntimeScript(),
     "ready-runtime.sh": readyRuntimeScript(),
-    "openclaw.json": `${JSON.stringify(openClawConfig(), null, 2)}\n`,
+    "openclaw.json": `${JSON.stringify(openClawConfig(defaultRuntimeModel), null, 2)}\n`,
     "workspace/IDENTITY.md": identityMarkdown(),
     "workspace/SOUL.md": soulMarkdown(),
     "workspace/AGENTS.md": agentsMarkdown(),
@@ -32,9 +35,6 @@ export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_SKIP_GMAIL_WATCHER=1
 export OPENCLAW_SKIP_CRON=1
 export OPENCLAW_SKIP_CANVAS_HOST=1
-
-gateway_port="\${OPENCLAW_GATEWAY_PORT:-18789}"
-adapter_port="\${E2B_AGENTS_ACP_ADAPTER_PORT:-18790}"
 
 mkdir -p \\
   /home/user/.e2b-agents/auth \\
@@ -60,6 +60,15 @@ adapter_pid=""
 trap 'kill "$gateway_pid" "$adapter_pid" >/dev/null 2>&1 || true; exit 0' TERM INT
 
 while true; do
+  if [ -s ${runtimePaths.runtimeEnv} ]; then
+    set -a
+    . ${runtimePaths.runtimeEnv}
+    set +a
+  fi
+
+  gateway_port="\${OPENCLAW_GATEWAY_PORT:-18789}"
+  adapter_port="\${E2B_AGENTS_ACP_ADAPTER_PORT:-18790}"
+
   openclaw gateway --allow-unconfigured --bind loopback --auth none --port "\${gateway_port}" \\
     >> /home/user/.e2b-agents/logs/openclaw-gateway.log 2>&1 &
   gateway_pid="$!"
@@ -97,6 +106,12 @@ function readyRuntimeScript() {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
+if [ -s ${runtimePaths.runtimeEnv} ]; then
+  set -a
+  . ${runtimePaths.runtimeEnv}
+  set +a
+fi
+
 gateway_port="\${OPENCLAW_GATEWAY_PORT:-18789}"
 adapter_port="\${E2B_AGENTS_ACP_ADAPTER_PORT:-18790}"
 
@@ -108,7 +123,9 @@ curl --max-time 10 -fsS "http://127.0.0.1:\${adapter_port}/healthz?ready=1" >/de
 `;
 }
 
-function openClawConfig() {
+export function openClawConfig(model = defaultRuntimeModel) {
+  const primaryModel = model.trim() || defaultRuntimeModel;
+  const modelID = primaryModel.startsWith("anthropic/") ? primaryModel.slice("anthropic/".length) : primaryModel;
   return {
     secrets: {
       providers: {
@@ -126,10 +143,10 @@ function openClawConfig() {
       defaults: {
         workspace: runtimePaths.workspace,
         model: {
-          primary: "anthropic/claude-sonnet-4-6",
+          primary: primaryModel,
         },
         models: {
-          "anthropic/claude-sonnet-4-6": {
+          [primaryModel]: {
             alias: "default",
           },
         },
@@ -143,8 +160,8 @@ function openClawConfig() {
           api: "anthropic-messages",
           models: [
             {
-              id: "claude-sonnet-4-6",
-              name: "Claude Sonnet 4.6",
+              id: modelID,
+              name: modelID,
               reasoning: true,
               input: ["text"],
               contextWindow: 200000,

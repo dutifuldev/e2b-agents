@@ -1,4 +1,5 @@
 import { Sandbox } from "e2b";
+import { openClawConfig, runtimePaths } from "./templateFiles.js";
 
 type Envelope = {
   command: "ensure";
@@ -18,9 +19,6 @@ type EnsureInput = {
   sessionKey: string;
   metadata?: Record<string, string>;
 };
-
-const authTokenPath = "/home/user/.e2b-agents/auth/token";
-const secretsPath = "/home/user/.e2b-agents/secrets/openclaw-secrets.json";
 
 async function main() {
   const envelope = JSON.parse(await readStdin()) as Envelope;
@@ -42,22 +40,20 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
   const acpBaseUrl = acpHost.startsWith("http") ? acpHost : `https://${acpHost}`;
 
   const secretStart = Date.now();
-  await writeRuntimeSecrets(runtime.sandbox, envelope);
+  await writeRuntimeFiles(runtime.sandbox, envelope);
   logTiming("runtime helper secrets injected", {
     durationMs: durationMs(secretStart),
     sandboxId: runtime.sandbox.sandboxId,
     created: runtime.created,
   });
 
-  if (runtime.created) {
-    const restartStart = Date.now();
-    await requestRuntimeRestart(runtime.sandbox);
-    logTiming("runtime helper runtime restart requested", {
-      durationMs: durationMs(restartStart),
-      sandboxId: runtime.sandbox.sandboxId,
-      created: runtime.created,
-    });
-  }
+  const restartStart = Date.now();
+  await requestRuntimeRestart(runtime.sandbox);
+  logTiming("runtime helper runtime restart requested", {
+    durationMs: durationMs(restartStart),
+    sandboxId: runtime.sandbox.sandboxId,
+    created: runtime.created,
+  });
 
   const readyStart = Date.now();
   await waitForACPAdapterReady(acpBaseUrl, input.sessionKey, envelope);
@@ -143,10 +139,12 @@ async function createSandbox(input: EnsureInput, envelope: Envelope) {
   return { sandbox, created: true };
 }
 
-async function writeRuntimeSecrets(sandbox: Sandbox, envelope: Envelope) {
-  await sandbox.files.write(authTokenPath, `${envelope.gatewayToken}\n`);
+async function writeRuntimeFiles(sandbox: Sandbox, envelope: Envelope) {
+  await sandbox.files.write(runtimePaths.authToken, `${envelope.gatewayToken}\n`);
+  await sandbox.files.write(runtimePaths.runtimeEnv, runtimeEnv(envelope));
+  await sandbox.files.write(runtimePaths.config, `${JSON.stringify(openClawConfig(envelope.model), null, 2)}\n`);
   await sandbox.files.write(
-    secretsPath,
+    runtimePaths.secrets,
     `${JSON.stringify(
       {
         providers: {
@@ -159,6 +157,23 @@ async function writeRuntimeSecrets(sandbox: Sandbox, envelope: Envelope) {
       2,
     )}\n`,
   );
+}
+
+function runtimeEnv(envelope: Envelope) {
+  return [
+    `OPENCLAW_GATEWAY_PORT=${positivePort(envelope.gatewayPort, 18789)}`,
+    `E2B_AGENTS_ACP_ADAPTER_PORT=${positivePort(envelope.adapterPort, positivePort(envelope.gatewayPort, 18789) + 1)}`,
+    `E2B_AGENTS_RUNTIME_MODEL=${shellSingleQuote(envelope.model || "anthropic/claude-sonnet-4-6")}`,
+    "",
+  ].join("\n");
+}
+
+function positivePort(value: number, fallback: number) {
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function shellSingleQuote(value: string) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 async function requestRuntimeRestart(sandbox: Sandbox) {
