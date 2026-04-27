@@ -1,6 +1,14 @@
-# e2b-agents
+<p align="center">
+  <img width="100" src="https://raw.githubusercontent.com/e2b-dev/E2B/refs/heads/main/readme-assets/logo-circle.png" alt="E2B logo">
+</p>
 
-> `e2b-agents` is an internal control plane for Slack-accessible agent runtimes running in E2B sandboxes.
+<h1 align="center">e2b-agents</h1>
+
+<p align="center">
+  Slack gateway for agent runtimes in E2B sandboxes.
+</p>
+
+## What is e2b-agents?
 
 `e2b-agents` connects Slack workspaces to long-lived E2B sandbox runtimes. The service receives Slack events, resolves the workspace, creates or reuses the workspace's current sandbox, sends the message to the runtime through an ACP adapter, and posts the final assistant reply back to Slack.
 
@@ -61,7 +69,9 @@ Slack surfaces map to ACP sessions:
 
 Channel messages receive channel replies. Thread messages receive thread replies.
 
-## Install
+## Getting started
+
+### 1. Install dependencies
 
 Install Go and Node dependencies:
 
@@ -69,6 +79,8 @@ Install Go and Node dependencies:
 go mod download
 npm install
 ```
+
+### 2. Build
 
 Build the TypeScript runtime helper:
 
@@ -82,7 +94,7 @@ Build the Go binary:
 go build ./cmd/e2b-agents
 ```
 
-## Configuration
+### 3. Configure environment
 
 Local development reads environment variables from the shell. The repo may have a gitignored `.env` file for local secrets:
 
@@ -126,7 +138,7 @@ Common optional variables:
 
 `OPENCLAW_GATEWAY_TOKEN` must be set to a real non-default secret in production.
 
-## Database
+### 4. Run migrations
 
 Run migrations before serving:
 
@@ -142,7 +154,7 @@ export E2B_AGENTS_MIGRATIONS_DIR=/path/to/migrations
 
 The database package uses GORM with explicit table names and SQL migrations. Test schema setup uses `AutoMigrate`, but production schema changes should go through SQL migration files.
 
-## Run
+### 5. Run the service
 
 Start the HTTP service:
 
