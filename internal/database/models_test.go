@@ -9,7 +9,6 @@ func TestTableNames(t *testing.T) {
 	cases := map[string]string{
 		"slack workspace":       SlackWorkspace{}.TableName(),
 		"slack processed event": SlackProcessedEvent{}.TableName(),
-		"schema migration":      SchemaMigration{}.TableName(),
 	}
 	for name, table := range cases {
 		if table == "" {
@@ -25,8 +24,6 @@ func TestTableNames(t *testing.T) {
 }
 
 func TestApplyMigrationsSQLite(t *testing.T) {
-	t.Setenv(MigrationDirectoryEnv(), filepath.Join("..", "..", "migrations"))
-
 	db, err := Open("sqlite://"+filepath.Join(t.TempDir(), "test.db"), PoolConfig{})
 	if err != nil {
 		t.Fatalf("Open() returned error: %v", err)

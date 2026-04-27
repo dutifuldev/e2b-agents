@@ -136,19 +136,13 @@ Common optional variables:
 
 ### 4. Run migrations
 
-Run migrations before serving:
+Apply the GORM schema before serving:
 
 ```bash
 go run ./cmd/e2b-agents migrate up
 ```
 
-Migrations are loaded from `migrations/` by default. Override the directory with:
-
-```bash
-export E2B_AGENTS_MIGRATIONS_DIR=/path/to/migrations
-```
-
-The database package uses GORM with explicit table names and SQL migrations. Test schema setup uses `AutoMigrate`, but production schema changes should go through SQL migration files.
+The database package uses GORM models with explicit table names. The migration command applies those models directly with GORM.
 
 ### 5. Run the service
 
@@ -253,7 +247,7 @@ Run the GCP compose service from the deployment host:
 docker compose -f deploy/gcp/docker-compose.yml up -d --build e2b-agents
 ```
 
-Run migrations with the compose ops profile:
+Apply the GORM schema with the compose ops profile:
 
 ```bash
 docker compose -f deploy/gcp/docker-compose.yml --profile ops run --rm e2b-agents-migrate

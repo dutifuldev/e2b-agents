@@ -190,7 +190,7 @@ The initial implementation should include:
 - typed config loader
 - GORM database package
 - explicit `TableName()` methods
-- SQL migrations
+- GORM schema application
 - Echo HTTP server
 - health/readiness endpoints
 - Slack OAuth/event/interaction/command endpoints

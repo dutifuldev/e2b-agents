@@ -8,7 +8,7 @@ This project should follow the useful Go, Echo, GORM, database, and runtime conv
 - `internal/app` should assemble runtime dependencies and own process lifecycle.
 - `internal/config` should load environment variables into one typed `Config`.
 - `internal/httpapi` should own the Echo server, route registration, request parsing, and response shaping.
-- `internal/database` should own GORM models, explicit table names, database opening, SQL migrations, and pool config.
+- `internal/database` should own GORM models, explicit table names, database opening, schema application, and pool config.
 - Domain-specific work should live in focused packages, for example:
   - `internal/slack`
   - `internal/e2b`
@@ -21,12 +21,8 @@ This project should follow the useful Go, Echo, GORM, database, and runtime conv
 - Use GORM models as explicit structs.
 - Every persistent model must declare an explicit `TableName()` method.
 - Keep table-name declarations together in `internal/database/table_names.go`.
-- Production must use SQL migrations as the schema source of truth.
-- Do not use `AutoMigrate` in runtime code.
-- If `AutoMigrate` is useful for tests, expose a separate test-only helper like `ApplyTestSchema`.
-- Use numbered migration files:
-  - `migrations/000001_initial.up.sql`
-  - `migrations/000001_initial.down.sql`
+- For e2b-agents, apply the schema from GORM models instead of keeping SQL migration files.
+- The `migrate up` command should call the GORM schema application path directly.
 - Use local surrogate IDs where useful, but preserve external IDs exactly.
 - For this project, E2B sandbox IDs should be treated as agent IDs.
 - E2B template IDs should be treated as agent image IDs.
@@ -128,9 +124,7 @@ internal/httpapi/
 internal/slack/
 internal/e2b/
 internal/workers/
-migrations/
 docs/
 ```
 
-The first implementation should keep the same discipline as `ghreplica`: explicit tables, explicit runtime wiring, thin HTTP handlers, typed config, SQL migrations, and narrow interfaces between Slack, E2B, database, and worker code.
-
+The first implementation should keep the useful discipline from `ghreplica`: explicit tables, explicit runtime wiring, thin HTTP handlers, typed config, GORM-managed schema application, and narrow interfaces between Slack, E2B, database, and worker code.

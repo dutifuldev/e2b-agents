@@ -22,7 +22,6 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=node-deps /app/runtime/e2b-helper/dist ./runtime/e2b-helper/dist
 COPY --from=go-build /out/e2b-agents /usr/local/bin/e2b-agents
-COPY migrations ./migrations
 EXPOSE 8080
 ENTRYPOINT ["e2b-agents"]
 CMD ["serve"]
