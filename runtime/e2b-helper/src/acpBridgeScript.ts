@@ -12,7 +12,7 @@ const sessionStorePath = String(process.env.E2B_AGENTS_ACP_SESSION_STORE || "/ho
 const command = JSON.parse(process.env.E2B_AGENTS_ACP_COMMAND_JSON || '["openclaw","acp"]');
 const requestTimeoutMs = Number(process.env.E2B_AGENTS_ACP_REQUEST_TIMEOUT_MS || "300000");
 const protocolVersion = Number(process.env.E2B_AGENTS_ACP_PROTOCOL_VERSION || "1");
-const sessionKeyPrefix = String(process.env.E2B_AGENTS_ACP_SESSION_KEY_PREFIX || "");
+const runtimeSessionKeyPrefix = String(process.env.E2B_AGENTS_ACP_RUNTIME_SESSION_KEY_PREFIX || "");
 
 if (!Array.isArray(command) || command.length === 0 || typeof command[0] !== "string") {
   throw new Error("E2B_AGENTS_ACP_COMMAND_JSON must be a non-empty JSON string array");
@@ -236,10 +236,9 @@ async function restoreStoredSession(sessionKey, sessionId) {
 
 function runtimeSessionKey(sessionKey) {
   const key = String(sessionKey || "").trim();
-  if (!sessionKeyPrefix) return key;
+  if (!runtimeSessionKeyPrefix) return key;
   const normalized = key.toLowerCase();
-  if (normalized.startsWith(sessionKeyPrefix)) return normalized;
-  return sessionKeyPrefix + normalized;
+  return runtimeSessionKeyPrefix + normalized;
 }
 
 async function loadSessionStore() {

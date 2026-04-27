@@ -199,9 +199,9 @@ The session router maps Slack surfaces to ACP sessions.
 
 Expected session keys:
 
-- channel conversation: `slack:v1:<team_id>:<channel_id>:channel`
-- thread conversation: `slack:v1:<team_id>:<channel_id>:<thread_ts>`
-- direct conversation: `slack:v1:<team_id>:<channel_id>:direct`
+- channel conversation: `slack-v1-<team_id>-<channel_id>-channel`
+- thread conversation: `slack-v1-<team_id>-<channel_id>-<thread_ts>`
+- direct conversation: `slack-v1-<team_id>-<channel_id>-direct`
 
 This keeps channel and thread context separate while preserving multi-turn memory within each surface.
 
@@ -259,7 +259,7 @@ Each template should define:
 - supported streaming behavior
 - required environment variables
 - adapter command and arguments
-- adapter version or protocol compatibility marker
+- adapter version marker
 
 The Go gateway should read this as configuration instead of hardcoding harness-specific behavior.
 

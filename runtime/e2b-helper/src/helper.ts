@@ -235,7 +235,7 @@ async function configureACPAdapter(sandbox: Sandbox, envelope: Envelope, baseEnv
     E2B_AGENTS_ACP_AUTH_TOKEN: envelope.gatewayToken,
     E2B_AGENTS_ACP_CWD: "/home/user/.openclaw/workspace",
     E2B_AGENTS_ACP_COMMAND_JSON: JSON.stringify(acpCommand),
-    E2B_AGENTS_ACP_SESSION_KEY_PREFIX: "agent:main:",
+    E2B_AGENTS_ACP_RUNTIME_SESSION_KEY_PREFIX: "agent:main:",
   };
   await sandbox.commands.run(
     `bash -lc ${shellQuote(
