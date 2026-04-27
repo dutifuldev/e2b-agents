@@ -94,6 +94,13 @@ async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope) {
         durationMs: durationMs(connectStart),
         sandboxId: input.sandboxId,
       });
+      if (!(await sandboxHasTemplateSupervisor(sandbox))) {
+        logTiming("runtime helper existing sandbox incompatible", {
+          sandboxId: input.sandboxId,
+          reason: "missing_template_supervisor",
+        });
+        return createSandbox(input, envelope);
+      }
       const timeoutStart = Date.now();
       await sandbox.setTimeout(envelope.sandboxTimeoutMs || 3_600_000, { requestTimeoutMs: 60_000 });
       logTiming("runtime helper sandbox timeout update completed", {
@@ -111,6 +118,26 @@ async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope) {
     }
   }
   return createSandbox(input, envelope);
+}
+
+async function sandboxHasTemplateSupervisor(sandbox: Sandbox) {
+  try {
+    await sandbox.commands.run(
+      [
+        "bash -lc",
+        shellSingleQuote([
+          `test -x ${runtimePaths.startScript}`,
+          `test -x ${runtimePaths.readyScript}`,
+          `test -x ${runtimePaths.acpAdapter}`,
+          `test -s ${runtimePaths.config}`,
+        ].join(" && ")),
+      ].join(" "),
+      { requestTimeoutMs: 10_000 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isMissingSandboxError(error: unknown) {

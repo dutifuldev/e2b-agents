@@ -2,6 +2,8 @@ export const runtimePaths = {
   acpAdapter: "/home/user/.e2b-agents/acp-adapter.mjs",
   authToken: "/home/user/.e2b-agents/auth/token",
   runtimeEnv: "/home/user/.e2b-agents/runtime.env",
+  startScript: "/home/user/.e2b-agents/start-runtime.sh",
+  readyScript: "/home/user/.e2b-agents/ready-runtime.sh",
   secrets: "/home/user/.e2b-agents/secrets/openclaw-secrets.json",
   sessionStore: "/home/user/.e2b-agents/acp-sessions.json",
   stateDir: "/home/user/.openclaw",

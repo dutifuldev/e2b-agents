@@ -37,15 +37,15 @@ const template = Template({ fileContextPath: contextDir })
   .copy("openclaw.json", runtimePaths.config, { mode: 0o644 })
   .copy("workspace", runtimePaths.workspace, { mode: 0o644 })
   .copy("acp-adapter.mjs", runtimePaths.acpAdapter, { mode: 0o755 })
-  .copy("start-runtime.sh", "/home/user/.e2b-agents/start-runtime.sh", { mode: 0o755 })
-  .copy("ready-runtime.sh", "/home/user/.e2b-agents/ready-runtime.sh", { mode: 0o755 })
+  .copy("start-runtime.sh", runtimePaths.startScript, { mode: 0o755 })
+  .copy("ready-runtime.sh", runtimePaths.readyScript, { mode: 0o755 })
   .runCmd([
     "chmod 700 /home/user/.e2b-agents/auth /home/user/.e2b-agents/secrets",
-    "chmod 755 /home/user/.e2b-agents/start-runtime.sh /home/user/.e2b-agents/ready-runtime.sh /home/user/.e2b-agents/acp-adapter.mjs",
+    `chmod 755 ${runtimePaths.startScript} ${runtimePaths.readyScript} ${runtimePaths.acpAdapter}`,
   ])
   .setStartCmd(
-    "/home/user/.e2b-agents/start-runtime.sh",
-    "/home/user/.e2b-agents/ready-runtime.sh",
+    runtimePaths.startScript,
+    runtimePaths.readyScript,
   );
 
 const info = await Template.build(template, buildName, {
