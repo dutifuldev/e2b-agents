@@ -92,6 +92,7 @@ func (s *Service) HandleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 }
 
 func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEnvelope) error {
+	eventStart := time.Now()
 	event := envelope.Event
 	if !shouldHandleSlackEvent(event) {
 		return nil
@@ -121,20 +122,52 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		return nil
 	}
 
+	runtimeStart := time.Now()
 	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionConversationID(event))
+	runtimeDuration := time.Since(runtimeStart)
 	if err != nil {
 		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"setup_status": SetupStatusFailed,
 			"last_error":   err.Error(),
 		})
 		if event.Channel != "" {
-			_ = s.postWorkspaceMessage(ctx, workspace, event.Channel, replyThreadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
+			postStart := time.Now()
+			failurePostErr := s.postWorkspaceMessage(ctx, workspace, event.Channel, replyThreadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
+			attrs := []any{
+				"workspace_id", workspace.ID,
+				"slack_team_id", workspace.SlackTeamID,
+				"slack_channel_id", event.Channel,
+				"thread_reply", strings.TrimSpace(replyThreadTS(event)) != "",
+				"duration_ms", time.Since(postStart).Milliseconds(),
+			}
+			if failurePostErr != nil {
+				attrs = append(attrs, "error", failurePostErr)
+			}
+			slog.Info("slack failure message post completed", attrs...)
 		}
 		return err
 	}
 	var postErr error
+	var postDuration time.Duration
 	if event.Channel != "" {
+		postStart := time.Now()
 		postErr = s.postWorkspaceMessage(ctx, workspace, event.Channel, replyThreadTS(event), reply.Text)
+		postDuration = time.Since(postStart)
+		logLevel := slog.LevelInfo
+		if postErr != nil {
+			logLevel = slog.LevelWarn
+		}
+		attrs := []any{
+			"workspace_id", workspace.ID,
+			"slack_team_id", workspace.SlackTeamID,
+			"slack_channel_id", event.Channel,
+			"thread_reply", strings.TrimSpace(replyThreadTS(event)) != "",
+			"duration_ms", postDuration.Milliseconds(),
+		}
+		if postErr != nil {
+			attrs = append(attrs, "error", postErr)
+		}
+		slog.Log(ctx, logLevel, "slack reply post completed", attrs...)
 	}
 	updates := map[string]any{
 		"last_slack_event_id":    envelope.EventID,
@@ -149,9 +182,23 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	if postErr != nil {
 		updates["last_error"] = postErr.Error()
 	}
+	updateStart := time.Now()
 	if err := s.workspaces.UpdateAfterMessage(ctx, workspace.ID, updates); err != nil {
 		return err
 	}
+	updateDuration := time.Since(updateStart)
+	slog.Info("slack event handled",
+		"workspace_id", workspace.ID,
+		"slack_team_id", workspace.SlackTeamID,
+		"slack_channel_id", event.Channel,
+		"thread_reply", strings.TrimSpace(replyThreadTS(event)) != "",
+		"sandbox_id", reply.SandboxID,
+		"session_id", reply.SessionID,
+		"runtime_duration_ms", runtimeDuration.Milliseconds(),
+		"slack_post_duration_ms", postDuration.Milliseconds(),
+		"database_update_duration_ms", updateDuration.Milliseconds(),
+		"total_duration_ms", time.Since(eventStart).Milliseconds(),
+	)
 	return postErr
 }
 

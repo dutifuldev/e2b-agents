@@ -45,6 +45,7 @@ async function main() {
 }
 
 async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
+  const totalStart = Date.now();
   if (!input.templateId) throw new Error("templateId is required");
   if (!input.sessionKey) throw new Error("sessionKey is required");
 
@@ -56,8 +57,20 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
 
   const runtime = await connectOrCreateSandbox(input, envelope, envs);
 
+  const configureStart = Date.now();
   await configureGateway(runtime.sandbox, envelope);
+  logTiming("runtime helper gateway configure completed", {
+    durationMs: durationMs(configureStart),
+    sandboxId: runtime.sandbox.sandboxId,
+    created: runtime.created,
+  });
   const host = runtime.sandbox.getHost(envelope.gatewayPort);
+  logTiming("runtime helper ensure completed", {
+    durationMs: durationMs(totalStart),
+    sandboxId: runtime.sandbox.sandboxId,
+    sessionKey: input.sessionKey,
+    created: runtime.created,
+  });
   return {
     sandboxId: runtime.sandbox.sandboxId,
     templateId: input.templateId,
@@ -68,40 +81,82 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
 }
 
 async function sendPrompt(input: SendInput, envelope: Envelope) {
+  const totalStart = Date.now();
   if (!input.sandboxId) throw new Error("sandboxId is required");
   if (!input.sessionKey) throw new Error("sessionKey is required");
   if (!input.prompt.trim()) throw new Error("prompt is required");
 
-  const sandbox = await Sandbox.connect(input.sandboxId, {
-    apiKey: requiredEnv("E2B_API_KEY"),
-    requestTimeoutMs: 60_000,
-  });
+  const connectStart = Date.now();
+  let sandbox: Sandbox;
+  try {
+    sandbox = await Sandbox.connect(input.sandboxId, {
+      apiKey: requiredEnv("E2B_API_KEY"),
+      requestTimeoutMs: 60_000,
+    });
+    logTiming("runtime helper sandbox connect completed", {
+      durationMs: durationMs(connectStart),
+      sandboxId: input.sandboxId,
+    });
+  } catch (error) {
+    logTiming("runtime helper sandbox connect failed", {
+      durationMs: durationMs(connectStart),
+      sandboxId: input.sandboxId,
+      error: errorMessage(error),
+    });
+    throw error;
+  }
   const host = sandbox.getHost(envelope.gatewayPort);
   const baseUrl = host.startsWith("http") ? host : `https://${host}`;
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${envelope.gatewayToken}`,
-      "content-type": "application/json",
-      "x-openclaw-agent-id": "main",
-      "x-openclaw-session-key": input.sessionKey,
-    },
-    body: JSON.stringify({
-      model: "openclaw:main",
-      user: input.sessionKey,
-      messages: [
-        {
-          role: "system",
-          content: runtimeSystemPrompt(),
-        },
-        {
-          role: "user",
-          content: input.prompt,
-        },
-      ],
-    }),
-  });
+  const fetchStart = Date.now();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${envelope.gatewayToken}`,
+        "content-type": "application/json",
+        "x-openclaw-agent-id": "main",
+        "x-openclaw-session-key": input.sessionKey,
+      },
+      body: JSON.stringify({
+        model: "openclaw:main",
+        user: input.sessionKey,
+        messages: [
+          {
+            role: "system",
+            content: runtimeSystemPrompt(),
+          },
+          {
+            role: "user",
+            content: input.prompt,
+          },
+        ],
+      }),
+    });
+    logTiming("runtime helper gateway fetch completed", {
+      durationMs: durationMs(fetchStart),
+      sandboxId: input.sandboxId,
+      sessionKey: input.sessionKey,
+      status: response.status,
+    });
+  } catch (error) {
+    logTiming("runtime helper gateway fetch failed", {
+      durationMs: durationMs(fetchStart),
+      sandboxId: input.sandboxId,
+      sessionKey: input.sessionKey,
+      error: errorMessage(error),
+    });
+    throw error;
+  }
+  const bodyStart = Date.now();
   const bodyText = await response.text();
+  logTiming("runtime helper gateway body read completed", {
+    durationMs: durationMs(bodyStart),
+    sandboxId: input.sandboxId,
+    sessionKey: input.sessionKey,
+    status: response.status,
+    responseBytes: Buffer.byteLength(bodyText),
+  });
   if (!response.ok) {
     throw new Error(`runtime HTTP ${response.status}: ${bodyText.slice(0, 500)}`);
   }
@@ -113,6 +168,12 @@ async function sendPrompt(input: SendInput, envelope: Envelope) {
   if (!text.trim()) {
     throw new Error("runtime returned an empty reply");
   }
+  logTiming("runtime helper send completed", {
+    durationMs: durationMs(totalStart),
+    sandboxId: input.sandboxId,
+    sessionKey: input.sessionKey,
+    replyBytes: Buffer.byteLength(text),
+  });
   return {
     text: normalizeText(text),
     sessionKey: input.sessionKey,
@@ -122,14 +183,28 @@ async function sendPrompt(input: SendInput, envelope: Envelope) {
 async function connectOrCreateSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
   if (input.sandboxId) {
     try {
+      const connectStart = Date.now();
       const sandbox = await Sandbox.connect(input.sandboxId, {
         apiKey: requiredEnv("E2B_API_KEY"),
         requestTimeoutMs: 60_000,
       });
+      logTiming("runtime helper existing sandbox connect completed", {
+        durationMs: durationMs(connectStart),
+        sandboxId: input.sandboxId,
+      });
+      const timeoutStart = Date.now();
       await sandbox.setTimeout(envelope.sandboxTimeoutMs || 3_600_000, { requestTimeoutMs: 60_000 });
+      logTiming("runtime helper sandbox timeout update completed", {
+        durationMs: durationMs(timeoutStart),
+        sandboxId: input.sandboxId,
+      });
       return { sandbox, created: false };
     } catch (error) {
       if (!isMissingSandboxError(error)) throw error;
+      logTiming("runtime helper existing sandbox missing", {
+        sandboxId: input.sandboxId,
+        error: errorMessage(error),
+      });
       return createSandbox(input, envelope, envs);
     }
   }
@@ -142,12 +217,18 @@ function isMissingSandboxError(error: unknown) {
 }
 
 async function createSandbox(input: EnsureInput, envelope: Envelope, envs: Record<string, string>) {
+  const start = Date.now();
   const sandbox = await Sandbox.create(input.templateId, {
     apiKey: requiredEnv("E2B_API_KEY"),
     timeoutMs: envelope.sandboxTimeoutMs || 3_600_000,
     requestTimeoutMs: 120_000,
     envs,
     metadata: input.metadata ?? {},
+  });
+  logTiming("runtime helper sandbox create completed", {
+    durationMs: durationMs(start),
+    sandboxId: sandbox.sandboxId,
+    templateId: input.templateId,
   });
   return { sandbox, created: true };
 }
@@ -360,6 +441,18 @@ function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function durationMs(startMs: number) {
+  return Date.now() - startMs;
+}
+
+function errorMessage(error: unknown) {
+  return redact(error instanceof Error ? error.message : String(error));
+}
+
+function logTiming(msg: string, fields: Record<string, unknown>) {
+  process.stderr.write(`${JSON.stringify({ msg, ...fields })}\n`);
 }
 
 async function readStdin() {

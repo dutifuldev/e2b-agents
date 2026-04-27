@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strings"
 	"time"
@@ -138,7 +139,9 @@ func (c *RuntimeClient) run(ctx context.Context, command string, input any, out 
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	start := time.Now()
 	if err := cmd.Run(); err != nil {
+		emitRuntimeHelperLogs(command, stderr.String())
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
@@ -146,11 +149,21 @@ func (c *RuntimeClient) run(ctx context.Context, command string, input any, out 
 		if msg == "" {
 			msg = err.Error()
 		}
+		slog.Warn("runtime helper process failed",
+			"command", command,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"error", sanitizeHelperError(msg),
+		)
 		return fmt.Errorf("runtime helper %s failed: %s", command, sanitizeHelperError(msg))
 	}
+	emitRuntimeHelperLogs(command, stderr.String())
 	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
 		return fmt.Errorf("decode runtime helper %s response: %w: %s", command, err, strings.TrimSpace(stdout.String()))
 	}
+	slog.Info("runtime helper process succeeded",
+		"command", command,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 	return nil
 }
 
@@ -160,4 +173,31 @@ func sanitizeHelperError(msg string) string {
 		msg = msg[:1000]
 	}
 	return msg
+}
+
+func emitRuntimeHelperLogs(command, stderrText string) {
+	for _, line := range strings.Split(stderrText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			slog.Info("runtime helper log",
+				"command", command,
+				"message", sanitizeHelperError(line),
+			)
+			continue
+		}
+		msg, _ := fields["msg"].(string)
+		if msg == "" {
+			msg = "runtime helper timing"
+		}
+		delete(fields, "msg")
+		attrs := []any{"command", command}
+		for key, value := range fields {
+			attrs = append(attrs, key, value)
+		}
+		slog.Info(msg, attrs...)
+	}
 }
