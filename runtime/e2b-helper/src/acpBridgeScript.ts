@@ -12,6 +12,7 @@ const sessionStorePath = String(process.env.E2B_AGENTS_ACP_SESSION_STORE || "/ho
 const command = JSON.parse(process.env.E2B_AGENTS_ACP_COMMAND_JSON || '["openclaw","acp"]');
 const requestTimeoutMs = Number(process.env.E2B_AGENTS_ACP_REQUEST_TIMEOUT_MS || "300000");
 const protocolVersion = Number(process.env.E2B_AGENTS_ACP_PROTOCOL_VERSION || "1");
+const sessionKeyPrefix = String(process.env.E2B_AGENTS_ACP_SESSION_KEY_PREFIX || "");
 
 if (!Array.isArray(command) || command.length === 0 || typeof command[0] !== "string") {
   throw new Error("E2B_AGENTS_ACP_COMMAND_JSON must be a non-empty JSON string array");
@@ -49,7 +50,7 @@ function normalizeText(text) {
 function startAgent() {
   if (child && !child.killed && child.exitCode === null && child.signalCode === null) return;
   const [bin, ...args] = command;
-  log("acp bridge starting harness", { command: bin, args });
+  log("acp bridge starting harness", { command: bin, args: redactCommandArgs(args) });
   child = spawn(bin, args, {
     cwd,
     env: process.env,
@@ -198,10 +199,11 @@ async function sessionForKey(sessionKey) {
     await persistSessionStore();
   }
   const start = Date.now();
+  const agentSessionKey = runtimeSessionKey(sessionKey);
   const result = await request("session/new", {
     cwd,
     mcpServers: [],
-    _meta: { sessionKey },
+    _meta: { sessionKey: agentSessionKey },
   });
   const sessionId = result?.sessionId;
   if (!sessionId) throw new Error("ACP session/new did not return sessionId");
@@ -213,7 +215,7 @@ async function sessionForKey(sessionKey) {
 }
 
 async function restoreStoredSession(sessionKey, sessionId) {
-  const params = { sessionId, cwd, mcpServers: [], _meta: { sessionKey } };
+  const params = { sessionId, cwd, mcpServers: [], _meta: { sessionKey: runtimeSessionKey(sessionKey) } };
   const start = Date.now();
   try {
     if (agentCapabilities?.loadSession) {
@@ -230,6 +232,14 @@ async function restoreStoredSession(sessionKey, sessionId) {
     log("acp bridge stored session restore failed", { sessionKey, sessionId, error: String(error?.message || error).slice(0, 1000) });
   }
   return false;
+}
+
+function runtimeSessionKey(sessionKey) {
+  const key = String(sessionKey || "").trim();
+  if (!sessionKeyPrefix) return key;
+  const normalized = key.toLowerCase();
+  if (normalized.startsWith(sessionKeyPrefix)) return normalized;
+  return sessionKeyPrefix + normalized;
 }
 
 async function loadSessionStore() {
@@ -369,7 +379,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "0.0.0.0", () => {
-  log("acp bridge listening", { port, cwd, command });
+  log("acp bridge listening", { port, cwd, command: redactCommandArgs(command) });
 });
 
 process.on("SIGTERM", () => {
@@ -377,5 +387,12 @@ process.on("SIGTERM", () => {
   child?.kill();
   process.exit(0);
 });
+
+function redactCommandArgs(args) {
+  return args.map((arg, index) => {
+    if (index > 0 && args[index - 1] === "--token") return "[redacted]";
+    return arg;
+  });
+}
 `;
 }

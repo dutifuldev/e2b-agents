@@ -116,8 +116,14 @@ func TestSlackSessionKeyScopesConversationSurface(t *testing.T) {
 	if first != second {
 		t.Fatalf("slackSessionKey() mismatch: %q != %q", first, second)
 	}
-	if got := slackSessionKey("T123", "C123", ""); got != "slack:v1:T123:C123:direct" {
+	if got := slackSessionKey("T123", "C123", ""); got != "slack-v1-T123-C123-direct" {
 		t.Fatalf("slackSessionKey() = %q, want direct fallback", got)
+	}
+	if got := slackSessionKey("T123", "C123", "1777220000.000000"); got != "slack-v1-T123-C123-1777220000.000000" {
+		t.Fatalf("slackSessionKey() = %q, want gateway-safe thread key", got)
+	}
+	if got := slackSessionKey("T123", "C123", "bad:value"); got != "slack-v1-T123-C123-bad_value" {
+		t.Fatalf("slackSessionKey() = %q, want unsafe characters replaced", got)
 	}
 }
 

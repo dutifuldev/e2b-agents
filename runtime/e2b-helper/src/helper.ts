@@ -29,7 +29,7 @@ async function main() {
   const envelope = JSON.parse(await readStdin()) as Envelope;
   if (envelope.command === "ensure") {
     const output = await ensureRuntime(envelope.input as EnsureInput, envelope);
-    writeJSON(output);
+    await writeJSON(output);
     return;
   }
   throw new Error(`unsupported command: ${String(envelope.command)}`);
@@ -225,8 +225,8 @@ async function configureACPAdapter(sandbox: Sandbox, envelope: Envelope, baseEnv
     "acp",
     "--url",
     `ws://127.0.0.1:${envelope.gatewayPort}`,
-    "--token-file",
-    "/home/user/.openclaw/gateway.token",
+    "--token",
+    envelope.gatewayToken,
     "--no-prefix-cwd",
   ];
   const adapterEnvs = {
@@ -235,12 +235,14 @@ async function configureACPAdapter(sandbox: Sandbox, envelope: Envelope, baseEnv
     E2B_AGENTS_ACP_AUTH_TOKEN: envelope.gatewayToken,
     E2B_AGENTS_ACP_CWD: "/home/user/.openclaw/workspace",
     E2B_AGENTS_ACP_COMMAND_JSON: JSON.stringify(acpCommand),
+    E2B_AGENTS_ACP_SESSION_KEY_PREFIX: "agent:main:",
   };
-  await sandbox.commands.run(`node /home/user/.e2b-agents/acp-adapter.mjs`, {
-    background: true,
-    requestTimeoutMs: 60_000,
-    envs: adapterEnvs,
-  });
+  await sandbox.commands.run(
+    `bash -lc ${shellQuote(
+      "nohup node /home/user/.e2b-agents/acp-adapter.mjs >> /home/user/.e2b-agents/acp-adapter.log 2>&1 < /dev/null &",
+    )}`,
+    { requestTimeoutMs: 60_000, envs: adapterEnvs },
+  );
   for (let i = 0; i < 60; i++) {
     if (await isACPAdapterReady(sandbox, envelope, baseEnvs)) {
       return;
@@ -395,10 +397,20 @@ async function readStdin() {
 }
 
 function writeJSON(value: unknown) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  return new Promise<void>((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(value)}\n`, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
-main().catch((error) => {
+main().then(() => {
+  process.exit(0);
+}).catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${redact(message)}\n`);
   process.exit(1);

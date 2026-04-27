@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -420,7 +422,32 @@ func (s *Service) lockWorkspace(workspaceID string) func() {
 
 func slackSessionKey(slackTeamID, channelID, conversationSurface string) string {
 	conversationID := firstNonEmpty(conversationSurface, "direct")
-	return fmt.Sprintf("slack:%s:%s:%s:%s", slackSessionKeyVersion, slackTeamID, channelID, conversationID)
+	return safeRuntimeSessionID(fmt.Sprintf("slack-%s-%s-%s-%s", slackSessionKeyVersion, slackTeamID, channelID, conversationID))
+}
+
+func safeRuntimeSessionID(value string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(value) {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := b.String()
+	if out == "" || !isASCIIAlphaNumeric(out[0]) {
+		out = "s" + out
+	}
+	if len(out) <= 128 {
+		return out
+	}
+	sum := sha256.Sum256([]byte(out))
+	suffix := hex.EncodeToString(sum[:])[:16]
+	return out[:111] + "-" + suffix
+}
+
+func isASCIIAlphaNumeric(ch byte) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
 }
 
 func (s *Service) postWorkspaceMessage(ctx context.Context, workspace database.SlackWorkspace, channel, threadTSValue, text string) error {

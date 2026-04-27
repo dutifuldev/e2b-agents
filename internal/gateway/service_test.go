@@ -138,7 +138,7 @@ func TestHandleSlackEnvelopeDirectSendsReadyWorkspace(t *testing.T) {
 	if send.SandboxID != "sandbox-ready" {
 		t.Fatalf("Send sandbox = %q, want sandbox-ready", send.SandboxID)
 	}
-	if send.SessionKey != "slack:v1:T123:C123:channel" {
+	if send.SessionKey != "slack-v1-T123-C123-channel" {
 		t.Fatalf("Send session = %q, want channel session", send.SessionKey)
 	}
 
@@ -149,7 +149,7 @@ func TestHandleSlackEnvelopeDirectSendsReadyWorkspace(t *testing.T) {
 	if updated.CurrentSandboxID != "sandbox-ready" {
 		t.Fatalf("current sandbox = %q, want sandbox-ready", updated.CurrentSandboxID)
 	}
-	if updated.CurrentACPSessionID != "slack:v1:T123:C123:channel" {
+	if updated.CurrentACPSessionID != "slack-v1-T123-C123-channel" {
 		t.Fatalf("current session = %q, want channel session", updated.CurrentACPSessionID)
 	}
 }
@@ -161,7 +161,7 @@ func TestHandleSlackEnvelopeEnsuresAndRetriesUnavailableRuntime(t *testing.T) {
 			TemplateID: "openclaw",
 			Host:       "localhost",
 			BaseURL:    "http://localhost",
-			SessionKey: "slack:v1:T123:C123:channel",
+			SessionKey: "slack-v1-T123-C123-channel",
 		},
 		sendErrs: []error{errors.New("runtime helper send failed: connection refused")},
 	}
@@ -221,7 +221,7 @@ func TestHandleSlackEnvelopeEnsuresAndRetriesUnavailableRuntime(t *testing.T) {
 	if updated.CurrentSandboxID != "sandbox-recovered" {
 		t.Fatalf("current sandbox = %q, want sandbox-recovered", updated.CurrentSandboxID)
 	}
-	if updated.CurrentACPSessionID != "slack:v1:T123:C123:channel" {
+	if updated.CurrentACPSessionID != "slack-v1-T123-C123-channel" {
 		t.Fatalf("current session = %q, want channel session", updated.CurrentACPSessionID)
 	}
 }

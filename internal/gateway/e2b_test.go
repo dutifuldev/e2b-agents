@@ -22,7 +22,7 @@ func TestRuntimeClientSendUsesCachedACPAdapter(t *testing.T) {
 			t.Fatalf("decode payload: %v", err)
 		}
 		seenSession = payload.SessionKey
-		_, _ = w.Write([]byte(`{"text":"hello\n\nworld","sessionKey":"slack:v1:T:C:channel","acpSessionId":"sess-1"}`))
+		_, _ = w.Write([]byte(`{"text":"hello\n\nworld","sessionKey":"slack-v1-T-C-channel","acpSessionId":"sess-1"}`))
 	}))
 	defer server.Close()
 
@@ -39,7 +39,7 @@ func TestRuntimeClientSendUsesCachedACPAdapter(t *testing.T) {
 
 	out, err := client.Send(context.Background(), SendRuntimeInput{
 		SandboxID:  "sandbox-1",
-		SessionKey: "slack:v1:T:C:channel",
+		SessionKey: "slack-v1-T-C-channel",
 		Prompt:     "hi",
 	})
 	if err != nil {
@@ -54,7 +54,7 @@ func TestRuntimeClientSendUsesCachedACPAdapter(t *testing.T) {
 	if seenAuth != "Bearer secret-token" {
 		t.Fatalf("authorization = %q, want bearer token", seenAuth)
 	}
-	if seenSession != "slack:v1:T:C:channel" {
+	if seenSession != "slack-v1-T-C-channel" {
 		t.Fatalf("session = %q, want Slack session key", seenSession)
 	}
 }
@@ -66,7 +66,7 @@ func TestRuntimeClientSendWithoutCachedEndpointIsUnavailable(t *testing.T) {
 	})
 	_, err := client.Send(context.Background(), SendRuntimeInput{
 		SandboxID:  "sandbox-missing-cache",
-		SessionKey: "slack:v1:T:C:channel",
+		SessionKey: "slack-v1-T-C-channel",
 		Prompt:     "hi",
 	})
 	if err == nil {
