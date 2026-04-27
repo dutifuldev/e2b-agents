@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"database/sql"
+	"log/slog"
+	"time"
 
 	"github.com/dutifuldev/e2b-agents/internal/config"
 	"github.com/dutifuldev/e2b-agents/internal/database"
@@ -75,6 +77,11 @@ func NewRuntime(ctx context.Context, cfg config.Config) (*Runtime, error) {
 }
 
 func (r *Runtime) Serve(ctx context.Context) error {
+	prewarmCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	if err := r.gateway.PrewarmReadyWorkspaces(prewarmCtx); err != nil {
+		slog.Warn("runtime startup prewarm did not complete", "error", err)
+	}
+	cancel()
 	return r.server.Start(ctx, r.cfg.AppAddr)
 }
 

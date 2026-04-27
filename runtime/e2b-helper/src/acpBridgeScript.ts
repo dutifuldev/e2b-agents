@@ -7,6 +7,7 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const port = Number(process.env.E2B_AGENTS_ACP_ADAPTER_PORT || "18790");
 const token = String(process.env.E2B_AGENTS_ACP_AUTH_TOKEN || "");
+const tokenFile = String(process.env.E2B_AGENTS_ACP_AUTH_TOKEN_FILE || "");
 const cwd = String(process.env.E2B_AGENTS_ACP_CWD || process.cwd());
 const sessionStorePath = String(process.env.E2B_AGENTS_ACP_SESSION_STORE || "/home/user/.e2b-agents/acp-sessions.json");
 const command = JSON.parse(process.env.E2B_AGENTS_ACP_COMMAND_JSON || '["openclaw","acp"]');
@@ -322,9 +323,28 @@ function readBody(req) {
   });
 }
 
-function authorized(req) {
-  if (!token) return true;
-  return req.headers.authorization === "Bearer " + token;
+async function currentAuthToken() {
+  if (token) return token;
+  if (!tokenFile) return "";
+  try {
+    return (await readFile(tokenFile, "utf8")).trim();
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      log("acp bridge auth token read failed", { error: String(error?.message || error).slice(0, 1000) });
+    }
+    return "";
+  }
+}
+
+async function authorized(req) {
+  const expected = await currentAuthToken();
+  if (!expected) return !tokenFile;
+  return req.headers.authorization === "Bearer " + expected;
+}
+
+function isLoopbackRequest(req) {
+  const address = req.socket?.remoteAddress || "";
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 const server = http.createServer(async (req, res) => {
@@ -332,12 +352,16 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (url.pathname === "/healthz") {
       if (url.searchParams.get("ready") === "1") {
-        if (!authorized(req)) {
+        if (!isLoopbackRequest(req) && !(await authorized(req))) {
           res.writeHead(401, { "content-type": "application/json" });
           res.end(JSON.stringify({ error: "unauthorized" }));
           return;
         }
         await initialize();
+        const sessionKey = String(url.searchParams.get("sessionKey") || "").trim();
+        if (sessionKey) {
+          await sessionForKey(sessionKey);
+        }
       }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, initialized, sessions: sessions.size }));
@@ -348,7 +372,7 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: "not found" }));
       return;
     }
-    if (!authorized(req)) {
+    if (!(await authorized(req))) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
       return;

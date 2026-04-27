@@ -93,6 +93,84 @@ func (s *Service) HandleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	}
 }
 
+func (s *Service) PrewarmReadyWorkspaces(ctx context.Context) error {
+	if s.runtime == nil {
+		return errors.New("runtime client is not configured")
+	}
+	var workspaces []database.SlackWorkspace
+	if err := s.db.WithContext(ctx).
+		Where("setup_status = ? AND current_sandbox_id <> ''", SetupStatusReady).
+		Find(&workspaces).Error; err != nil {
+		return err
+	}
+	if len(workspaces) == 0 {
+		slog.Info("runtime startup prewarm skipped", "reason", "no_ready_workspaces")
+		return nil
+	}
+	successes := 0
+	for _, workspace := range workspaces {
+		sessionKey := strings.TrimSpace(workspace.CurrentACPSessionID)
+		if sessionKey == "" {
+			sessionKey = slackSessionKey(workspace.SlackTeamID, workspace.LastSlackChannelID, prewarmConversationSurface(workspace))
+		}
+		start := time.Now()
+		ensure, err := s.runtime.Ensure(ctx, EnsureRuntimeInput{
+			SandboxID:       workspace.CurrentSandboxID,
+			TemplateID:      workspace.TemplateID,
+			TeamID:          workspace.TeamID,
+			RequesterUserID: "startup-prewarm",
+			SessionKey:      sessionKey,
+			Metadata: map[string]string{
+				"ownerType":   "team",
+				"ownerId":     workspace.TeamID,
+				"teamId":      workspace.TeamID,
+				"source":      "startup_prewarm",
+				"slackTeamId": workspace.SlackTeamID,
+			},
+		})
+		if err != nil {
+			slog.Warn("runtime startup prewarm failed",
+				"workspace_id", workspace.ID,
+				"slack_team_id", workspace.SlackTeamID,
+				"sandbox_id", workspace.CurrentSandboxID,
+				"session_id", sessionKey,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"error", err,
+			)
+			continue
+		}
+		sessionID := firstNonEmpty(ensure.SessionKey, sessionKey)
+		successes++
+		if err := s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
+			"current_sandbox_id":     ensure.SandboxID,
+			"current_acp_session_id": sessionID,
+			"setup_status":           SetupStatusReady,
+			"last_error":             "",
+		}); err != nil {
+			slog.Warn("runtime startup prewarm state update failed",
+				"workspace_id", workspace.ID,
+				"slack_team_id", workspace.SlackTeamID,
+				"sandbox_id", ensure.SandboxID,
+				"session_id", sessionID,
+				"error", err,
+			)
+		}
+		slog.Info("runtime startup prewarm succeeded",
+			"workspace_id", workspace.ID,
+			"slack_team_id", workspace.SlackTeamID,
+			"sandbox_id", ensure.SandboxID,
+			"session_id", sessionID,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+	}
+	slog.Info("runtime startup prewarm completed",
+		"workspace_count", len(workspaces),
+		"success_count", successes,
+		"failure_count", len(workspaces)-successes,
+	)
+	return nil
+}
+
 func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEnvelope) error {
 	eventStart := time.Now()
 	event := envelope.Event
@@ -483,6 +561,14 @@ func sessionConversationID(event SlackEvent) string {
 		return "channel"
 	}
 	return ""
+}
+
+func prewarmConversationSurface(workspace database.SlackWorkspace) string {
+	channelID := strings.TrimSpace(workspace.LastSlackChannelID)
+	if channelID == "" || strings.HasPrefix(channelID, "D") {
+		return "direct"
+	}
+	return "channel"
 }
 
 func isDirectSlackConversation(event SlackEvent) bool {

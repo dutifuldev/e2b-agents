@@ -2,4 +2,5 @@ tmp_*
 .env
 node_modules/
 runtime/e2b-helper/dist/
+tmp_e2b_openclaw_template_context/
 e2b.toml

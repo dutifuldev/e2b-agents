@@ -154,6 +154,82 @@ func TestHandleSlackEnvelopeDirectSendsReadyWorkspace(t *testing.T) {
 	}
 }
 
+func TestPrewarmReadyWorkspacesEnsuresExistingSandbox(t *testing.T) {
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-ready",
+			TemplateID: "openclaw",
+			ACPBaseURL: "https://18790-sandbox-ready.e2b.app",
+			SessionKey: "slack-v1-T123-C123-channel",
+		},
+	}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	workspace, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	})
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := workspaces.UpdateAfterMessage(context.Background(), workspace.ID, map[string]any{
+		"current_sandbox_id":     "sandbox-ready",
+		"current_acp_session_id": "slack-v1-T123-C123-channel",
+		"last_slack_channel_id":  "C123",
+		"last_slack_message_ts":  "1777220000.000100",
+		"setup_status":           SetupStatusReady,
+		"last_error":             "previous failure",
+	}); err != nil {
+		t.Fatalf("seed ready workspace: %v", err)
+	}
+
+	if err := service.PrewarmReadyWorkspaces(context.Background()); err != nil {
+		t.Fatalf("PrewarmReadyWorkspaces() returned error: %v", err)
+	}
+	if len(runtime.ensureCalls) != 1 {
+		t.Fatalf("Ensure calls = %d, want 1", len(runtime.ensureCalls))
+	}
+	call := runtime.ensureCalls[0]
+	if call.SandboxID != "sandbox-ready" {
+		t.Fatalf("Ensure sandbox = %q, want sandbox-ready", call.SandboxID)
+	}
+	if call.SessionKey != "slack-v1-T123-C123-channel" {
+		t.Fatalf("Ensure session = %q, want stored session", call.SessionKey)
+	}
+	if call.Metadata["source"] != "startup_prewarm" {
+		t.Fatalf("Ensure source = %q, want startup_prewarm", call.Metadata["source"])
+	}
+
+	updated, err := workspaces.GetBySlackTeamID(context.Background(), "T123")
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+	if updated.LastError != "" {
+		t.Fatalf("last error = %q, want cleared", updated.LastError)
+	}
+}
+
+func TestPrewarmReadyWorkspacesSkipsWorkspacesWithoutSandbox(t *testing.T) {
+	runtime := &fakeRuntime{}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	if _, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	}); err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+
+	if err := service.PrewarmReadyWorkspaces(context.Background()); err != nil {
+		t.Fatalf("PrewarmReadyWorkspaces() returned error: %v", err)
+	}
+	if len(runtime.ensureCalls) != 0 {
+		t.Fatalf("Ensure calls = %d, want 0", len(runtime.ensureCalls))
+	}
+}
+
 func TestHandleSlackEnvelopeEnsuresAndRetriesUnavailableRuntime(t *testing.T) {
 	runtime := &fakeRuntime{
 		ensureOutput: EnsureRuntimeOutput{
