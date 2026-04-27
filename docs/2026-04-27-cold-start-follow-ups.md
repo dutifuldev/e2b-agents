@@ -37,15 +37,16 @@ the gateway forces one runtime recovery and resends the same prompt. This keeps
 the normal path short while still handling a snapshotted adapter that is
 listening but cannot yet complete the ACP prompt path.
 
-This assumes the runtime model matches the model baked into the template. If the
-deployment requests a different model, the helper restarts the runtime so
-OpenClaw reads the new config instead of silently serving the template config.
-The production direction is to publish a matching template when config-affecting
-runtime settings change.
+This assumes the runtime model matches the model baked into the template. For a
+new sandbox, if the deployment requests a different model, the helper restarts
+the runtime so OpenClaw reads the new config instead of silently serving the
+template config. The production direction is to publish a matching template when
+config-affecting runtime settings change.
 
-For reconnected sandboxes, the helper checks the gateway's active default model
-before taking the fast path. If the running model does not match the requested
-model, it restarts instead of serving stale runtime config.
+For reconnected sandboxes, including custom-model deployments, the helper checks
+the gateway's active default model before taking the fast path. If the running
+model does not match the requested model, it restarts instead of serving stale
+runtime config.
 
 ## Next Work
 

@@ -213,7 +213,7 @@ async function activateRuntime(
     return;
   }
 
-  if (templateModelDiffers(envelope)) {
+  if (created && templateModelDiffers(envelope)) {
     logTiming("runtime helper runtime restart required", {
       sandboxId: sandbox.sandboxId,
       created,
