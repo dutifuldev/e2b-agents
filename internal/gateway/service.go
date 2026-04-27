@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +74,15 @@ func (s *Service) HandleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 	ctx, cancel := context.WithTimeout(context.Background(), s.processingTimeout)
 	defer cancel()
 	if err := s.handleSlackEnvelope(ctx, envelope); err != nil {
-		log.Printf("slack event handling failed event_id=%s team_id=%s err=%v", envelope.EventID, envelope.TeamID, err)
+		slog.Error("slack event handling failed",
+			"event_id", envelope.EventID,
+			"team_id", envelope.TeamID,
+			"enterprise_id", envelope.EnterpriseID,
+			"event_type", envelope.Event.Type,
+			"channel_id", envelope.Event.Channel,
+			"thread_ts", replyThreadTS(envelope.Event),
+			"error", err,
+		)
 	}
 }
 
@@ -115,13 +123,13 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 			"last_error":   err.Error(),
 		})
 		if event.Channel != "" {
-			_ = s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
+			_ = s.postWorkspaceMessage(ctx, workspace, event.Channel, replyThreadTS(event), "I could not complete that request. The service recorded the failure for debugging.")
 		}
 		return err
 	}
 	var postErr error
 	if event.Channel != "" {
-		postErr = s.postWorkspaceMessage(ctx, workspace, event.Channel, threadTS(event), reply.Text)
+		postErr = s.postWorkspaceMessage(ctx, workspace, event.Channel, replyThreadTS(event), reply.Text)
 	}
 	updates := map[string]any{
 		"last_slack_event_id":    envelope.EventID,
@@ -271,12 +279,9 @@ func (s *Service) postWorkspaceMessage(ctx context.Context, workspace database.S
 	return client.PostMessage(ctx, channel, threadTSValue, text)
 }
 
-func threadTS(event SlackEvent) string {
+func replyThreadTS(event SlackEvent) string {
 	if strings.TrimSpace(event.ThreadTS) != "" {
-		return event.ThreadTS
-	}
-	if event.Type == "app_mention" {
-		return event.TS
+		return strings.TrimSpace(event.ThreadTS)
 	}
 	return ""
 }

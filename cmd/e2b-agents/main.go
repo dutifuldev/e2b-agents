@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,9 +17,15 @@ import (
 )
 
 func main() {
+	configureLogger()
 	if err := rootCommand().Execute(); err != nil {
-		log.Fatal(err)
+		slog.Error("command failed", "error", err)
+		os.Exit(1)
 	}
+}
+
+func configureLogger() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 }
 
 func rootCommand() *cobra.Command {
