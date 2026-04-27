@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit",
+    "template:build": "npm run build && node runtime/openclaw-template/build.mjs"
   },
   "dependencies": {
     "e2b": "^2.10.5"
