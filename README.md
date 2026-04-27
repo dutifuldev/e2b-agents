@@ -4,7 +4,7 @@
 
 `e2b-agents` connects Slack workspaces to long-lived E2B sandbox runtimes. The service receives Slack events, resolves the workspace, creates or reuses the workspace's current sandbox, sends the message to the runtime through an ACP adapter, and posts the final assistant reply back to Slack.
 
-The current production runtime packages OpenClaw in an E2B template and uses Anthropic Claude Sonnet 4.6 through the model identifier `anthropic/claude-sonnet-4-6`. The gateway treats the sandbox as the agent instance and the E2B template as the agent image.
+The current production runtime packages OpenClaw in an E2B template. The gateway treats the sandbox as the agent instance and the E2B template as the agent image.
 
 - **Slack gateway**: verifies Slack signatures, handles install callbacks and event delivery, and posts replies.
 - **E2B runtime lifecycle**: creates, reconnects, and refreshes sandboxes from configured templates.
@@ -38,7 +38,7 @@ Slack message -> DB lookup -> direct ACP adapter request -> Slack reply
 
 If the sandbox is expired, missing, or unreachable, the service recovers by ensuring a sandbox from the workspace template, starting the runtime gateway and ACP adapter, retrying the send once, and then updating the workspace row.
 
-## Agent model
+## Agent mapping
 
 `e2b-agents` uses E2B objects directly:
 
@@ -98,7 +98,7 @@ Required for `serve`:
 | --- | --- |
 | `DATABASE_URL` | Postgres connection string. |
 | `E2B_API_KEY` | E2B API key used to create and connect sandboxes. |
-| `ANTHROPIC_API_KEY` | Runtime model provider key passed into the sandbox. |
+| `ANTHROPIC_API_KEY` | Runtime provider key passed into the sandbox. |
 | `SLACK_SIGNING_SECRET` | Slack request signature verification. |
 | `SLACK_BOT_TOKEN` | Default Slack bot token for posting replies. |
 | `OPENCLAW_GATEWAY_TOKEN` | Non-default token used between the service and runtime gateway. |
@@ -116,7 +116,6 @@ Common optional variables:
 | `E2B_AGENTS_DEFAULT_TEAM_ID` | `default` | Fallback default team when Slack default is unset. |
 | `E2B_AGENTS_DEFAULT_TEMPLATE_ID` | `openclaw` | Fallback template when Slack default is unset. |
 | `E2B_AGENTS_WORKSPACE_AUTO_CREATE` | `true` | Whether Slack events can create workspace mappings. |
-| `E2B_AGENTS_RUNTIME_MODEL` | `anthropic/claude-sonnet-4-6` | Runtime model identifier. |
 | `E2B_HELPER_NODE` | `node` | Node executable for the E2B helper. |
 | `E2B_HELPER_SCRIPT` | `runtime/e2b-helper/dist/helper.js` | Built helper script path. |
 | `OPENCLAW_GATEWAY_PORT` | `18789` | Runtime gateway port inside the sandbox. |
@@ -270,7 +269,7 @@ curl -fsS https://e2b-agents.dutiful.dev/readyz
 The Go service calls `runtime/e2b-helper/dist/helper.js` for sandbox ensure work. The helper:
 
 1. Connects to the existing sandbox or creates one from the workspace template.
-2. Writes runtime identity and model configuration files.
+2. Writes runtime identity and configuration files.
 3. Starts the OpenClaw gateway inside the sandbox.
 4. Writes and starts the ACP adapter script.
 5. Waits for gateway and adapter readiness.
@@ -289,7 +288,7 @@ The adapter owns ACP initialization, session creation or loading, prompt seriali
 
 - Slack Events API deliveries are acknowledged quickly by `/slack/events`; processing continues in a goroutine.
 - Only availability-style runtime failures trigger sandbox recovery.
-- Invalid prompts, model/provider errors, malformed runtime responses, and Slack post failures are reported without recreating the sandbox.
+- Invalid prompts, runtime errors, malformed runtime responses, and Slack post failures are reported without recreating the sandbox.
 - The workspace lock prevents concurrent messages for the same workspace from racing to recreate the runtime.
 - Structured logs include `runtime_duration_ms`, `slack_post_duration_ms`, `database_update_duration_ms`, and `total_duration_ms` on successful Slack event handling.
 - Direct-send success is logged as `runtime direct send succeeded`.
