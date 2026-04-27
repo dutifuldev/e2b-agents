@@ -44,9 +44,9 @@ template config. The production direction is to publish a matching template when
 config-affecting runtime settings change.
 
 For reconnected sandboxes, including custom-model deployments, the helper checks
-the gateway's active default model before taking the fast path. If the running
-model does not match the requested model, it restarts instead of serving stale
-runtime config.
+the gateway's active default model before it rewrites runtime config and before
+taking the fast path. If the running model does not match the requested model, it
+restarts instead of serving stale runtime config.
 
 ## Next Work
 

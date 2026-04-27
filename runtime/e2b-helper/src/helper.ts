@@ -21,6 +21,11 @@ type EnsureInput = {
   forceRestart?: boolean;
 };
 
+type ActiveRuntimeStatus = {
+  model: string;
+  error?: unknown;
+};
+
 async function main() {
   const envelope = JSON.parse(await readStdin()) as Envelope;
   if (envelope.command === "ensure") {
@@ -40,6 +45,8 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
   const acpHost = runtime.sandbox.getHost(adapterPort(envelope));
   const acpBaseUrl = acpHost.startsWith("http") ? acpHost : `https://${acpHost}`;
 
+  const activeStatus = await checkActiveRuntimeBeforeConfigWrite(runtime.sandbox, envelope, runtime.created);
+
   const secretStart = Date.now();
   await writeRuntimeFiles(runtime.sandbox, envelope);
   logTiming("runtime helper secrets injected", {
@@ -48,7 +55,7 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     created: runtime.created,
   });
 
-  await activateRuntime(runtime.sandbox, acpBaseUrl, input, envelope, runtime.created);
+  await activateRuntime(runtime.sandbox, acpBaseUrl, input, envelope, runtime.created, activeStatus);
 
   const host = runtime.sandbox.getHost(envelope.gatewayPort);
   logTiming("runtime helper ensure completed", {
@@ -202,6 +209,7 @@ async function activateRuntime(
   input: EnsureInput,
   envelope: Envelope,
   created: boolean,
+  activeStatus: ActiveRuntimeStatus | undefined,
 ) {
   if (input.forceRestart) {
     logTiming("runtime helper runtime restart required", {
@@ -226,14 +234,8 @@ async function activateRuntime(
 
   try {
     if (!created) {
-      const activeModelStart = Date.now();
-      const activeModel = await activeRuntimeModel(sandbox, envelope);
-      logTiming("runtime helper active model checked", {
-        durationMs: durationMs(activeModelStart),
-        sandboxId: sandbox.sandboxId,
-        activeModel: activeModel || "",
-        requestedModel: requestedModelID(envelope.model),
-      });
+      if (activeStatus?.error) throw activeStatus.error;
+      const activeModel = activeStatus?.model || "";
       if (!activeModel || activeModel !== requestedModelID(envelope.model)) {
         logTiming("runtime helper runtime restart required", {
           sandboxId: sandbox.sandboxId,
@@ -275,6 +277,28 @@ async function activateRuntime(
   }
 
   await restartRuntimeAndWait(sandbox, acpBaseUrl, input, envelope, created);
+}
+
+async function checkActiveRuntimeBeforeConfigWrite(sandbox: Sandbox, envelope: Envelope, created: boolean) {
+  if (created) return undefined;
+  const activeModelStart = Date.now();
+  try {
+    const activeModel = await activeRuntimeModel(sandbox, envelope);
+    logTiming("runtime helper active model checked", {
+      durationMs: durationMs(activeModelStart),
+      sandboxId: sandbox.sandboxId,
+      activeModel: activeModel || "",
+      requestedModel: requestedModelID(envelope.model),
+    });
+    return { model: activeModel };
+  } catch (error) {
+    logTiming("runtime helper active model check failed", {
+      durationMs: durationMs(activeModelStart),
+      sandboxId: sandbox.sandboxId,
+      error: errorMessage(error),
+    });
+    return { model: "", error };
+  }
 }
 
 async function restartRuntimeAndWait(
