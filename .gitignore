@@ -1,2 +1,5 @@
 tmp_*
 .env
+node_modules/
+runtime/e2b-helper/dist/
+e2b.toml
