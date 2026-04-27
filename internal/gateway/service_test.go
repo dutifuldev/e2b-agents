@@ -2,14 +2,268 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/dutifuldev/e2b-agents/internal/database"
+	"gorm.io/gorm"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func testSlackClient() *SlackClient {
+	return &SlackClient{
+		token: "test-token",
+		httpClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+			}, nil
+		})},
+	}
+}
+
+type fakeRuntime struct {
+	ensureCalls  []EnsureRuntimeInput
+	sendCalls    []SendRuntimeInput
+	ensureOutput EnsureRuntimeOutput
+	ensureErr    error
+	sendOutputs  []SendRuntimeOutput
+	sendErrs     []error
+}
+
+func (r *fakeRuntime) Ensure(_ context.Context, input EnsureRuntimeInput) (EnsureRuntimeOutput, error) {
+	r.ensureCalls = append(r.ensureCalls, input)
+	return r.ensureOutput, r.ensureErr
+}
+
+func (r *fakeRuntime) Send(_ context.Context, input SendRuntimeInput) (SendRuntimeOutput, error) {
+	r.sendCalls = append(r.sendCalls, input)
+	callIndex := len(r.sendCalls) - 1
+	if callIndex < len(r.sendErrs) && r.sendErrs[callIndex] != nil {
+		return SendRuntimeOutput{}, r.sendErrs[callIndex]
+	}
+	if callIndex < len(r.sendOutputs) {
+		return r.sendOutputs[callIndex], nil
+	}
+	return SendRuntimeOutput{Text: "ok", SessionKey: input.SessionKey}, nil
+}
+
+func newTestGatewayService(t *testing.T, runtime Runtime) (*Service, *gorm.DB) {
+	t.Helper()
+	db, err := database.Open(":memory:", database.PoolConfig{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := database.ApplyTestSchema(db); err != nil {
+		t.Fatalf("apply test schema: %v", err)
+	}
+	return NewService(db, Options{
+		Runtime:         runtime,
+		Slack:           testSlackClient(),
+		AutoCreate:      true,
+		DefaultTeamID:   "default",
+		DefaultTemplate: "openclaw",
+	}), db
+}
+
+func TestHandleSlackEnvelopeDirectSendsReadyWorkspace(t *testing.T) {
+	runtime := &fakeRuntime{}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	workspace, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	})
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := workspaces.UpdateAfterMessage(context.Background(), workspace.ID, map[string]any{
+		"current_sandbox_id": "sandbox-ready",
+		"setup_status":       SetupStatusReady,
+		"bot_token_ref":      "",
+	}); err != nil {
+		t.Fatalf("seed ready workspace: %v", err)
+	}
+
+	envelope := SlackEventEnvelope{
+		TeamID:  "T123",
+		EventID: "EvDirect",
+		Event: SlackEvent{
+			Type:        "app_mention",
+			ChannelType: "channel",
+			Channel:     "C123",
+			User:        "U123",
+			Text:        "<@BOT> hello",
+			TS:          "1777220000.000100",
+		},
+	}
+	if err := service.handleSlackEnvelope(context.Background(), envelope); err != nil {
+		t.Fatalf("handleSlackEnvelope() returned error: %v", err)
+	}
+	if len(runtime.ensureCalls) != 0 {
+		t.Fatalf("Ensure calls = %d, want 0", len(runtime.ensureCalls))
+	}
+	if len(runtime.sendCalls) != 1 {
+		t.Fatalf("Send calls = %d, want 1", len(runtime.sendCalls))
+	}
+	send := runtime.sendCalls[0]
+	if send.SandboxID != "sandbox-ready" {
+		t.Fatalf("Send sandbox = %q, want sandbox-ready", send.SandboxID)
+	}
+	if send.SessionKey != "slack:v1:T123:C123:channel" {
+		t.Fatalf("Send session = %q, want channel session", send.SessionKey)
+	}
+
+	updated, err := workspaces.GetBySlackTeamID(context.Background(), "T123")
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+	if updated.CurrentSandboxID != "sandbox-ready" {
+		t.Fatalf("current sandbox = %q, want sandbox-ready", updated.CurrentSandboxID)
+	}
+	if updated.CurrentACPSessionID != "slack:v1:T123:C123:channel" {
+		t.Fatalf("current session = %q, want channel session", updated.CurrentACPSessionID)
+	}
+}
+
+func TestHandleSlackEnvelopeEnsuresAndRetriesUnavailableRuntime(t *testing.T) {
+	runtime := &fakeRuntime{
+		ensureOutput: EnsureRuntimeOutput{
+			SandboxID:  "sandbox-recovered",
+			TemplateID: "openclaw",
+			Host:       "localhost",
+			BaseURL:    "http://localhost",
+			SessionKey: "slack:v1:T123:C123:channel",
+		},
+		sendErrs: []error{errors.New("runtime helper send failed: connection refused")},
+	}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	workspace, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	})
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := workspaces.UpdateAfterMessage(context.Background(), workspace.ID, map[string]any{
+		"current_sandbox_id": "sandbox-stale",
+		"setup_status":       SetupStatusReady,
+		"bot_token_ref":      "",
+	}); err != nil {
+		t.Fatalf("seed ready workspace: %v", err)
+	}
+
+	envelope := SlackEventEnvelope{
+		TeamID:  "T123",
+		EventID: "EvRecover",
+		Event: SlackEvent{
+			Type:        "app_mention",
+			ChannelType: "channel",
+			Channel:     "C123",
+			User:        "U123",
+			Text:        "<@BOT> hello",
+			TS:          "1777220000.000100",
+		},
+	}
+	if err := service.handleSlackEnvelope(context.Background(), envelope); err != nil {
+		t.Fatalf("handleSlackEnvelope() returned error: %v", err)
+	}
+	if len(runtime.sendCalls) != 2 {
+		t.Fatalf("Send calls = %d, want 2", len(runtime.sendCalls))
+	}
+	if runtime.sendCalls[0].SandboxID != "sandbox-stale" {
+		t.Fatalf("first Send sandbox = %q, want sandbox-stale", runtime.sendCalls[0].SandboxID)
+	}
+	if runtime.sendCalls[1].SandboxID != "sandbox-recovered" {
+		t.Fatalf("second Send sandbox = %q, want sandbox-recovered", runtime.sendCalls[1].SandboxID)
+	}
+	if len(runtime.ensureCalls) != 1 {
+		t.Fatalf("Ensure calls = %d, want 1", len(runtime.ensureCalls))
+	}
+	if runtime.ensureCalls[0].SandboxID != "sandbox-stale" {
+		t.Fatalf("Ensure sandbox = %q, want sandbox-stale", runtime.ensureCalls[0].SandboxID)
+	}
+
+	updated, err := workspaces.GetBySlackTeamID(context.Background(), "T123")
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+	if updated.CurrentSandboxID != "sandbox-recovered" {
+		t.Fatalf("current sandbox = %q, want sandbox-recovered", updated.CurrentSandboxID)
+	}
+	if updated.CurrentACPSessionID != "slack:v1:T123:C123:channel" {
+		t.Fatalf("current session = %q, want channel session", updated.CurrentACPSessionID)
+	}
+}
+
+func TestHandleSlackEnvelopeDoesNotRecoverNonAvailabilityError(t *testing.T) {
+	runtime := &fakeRuntime{
+		sendErrs: []error{errors.New("runtime helper send failed: runtime HTTP 401: unauthorized")},
+	}
+	service, db := newTestGatewayService(t, runtime)
+	workspaces := NewWorkspaceService(db)
+	workspace, err := workspaces.EnsureWorkspace(context.Background(), EnsureWorkspaceInput{
+		SlackTeamID: "T123",
+		TeamID:      "default",
+		TemplateID:  "openclaw",
+	})
+	if err != nil {
+		t.Fatalf("ensure workspace: %v", err)
+	}
+	if err := workspaces.UpdateAfterMessage(context.Background(), workspace.ID, map[string]any{
+		"current_sandbox_id": "sandbox-ready",
+		"setup_status":       SetupStatusReady,
+		"bot_token_ref":      "",
+	}); err != nil {
+		t.Fatalf("seed ready workspace: %v", err)
+	}
+
+	envelope := SlackEventEnvelope{
+		TeamID:  "T123",
+		EventID: "EvNoRecover",
+		Event: SlackEvent{
+			Type:        "app_mention",
+			ChannelType: "channel",
+			Channel:     "C123",
+			User:        "U123",
+			Text:        "<@BOT> hello",
+			TS:          "1777220000.000100",
+		},
+	}
+	if err := service.handleSlackEnvelope(context.Background(), envelope); err == nil {
+		t.Fatal("handleSlackEnvelope() returned nil error, want failure")
+	}
+	if len(runtime.ensureCalls) != 0 {
+		t.Fatalf("Ensure calls = %d, want 0", len(runtime.ensureCalls))
+	}
+	if len(runtime.sendCalls) != 1 {
+		t.Fatalf("Send calls = %d, want 1", len(runtime.sendCalls))
+	}
+
+	updated, err := workspaces.GetBySlackTeamID(context.Background(), "T123")
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+	if updated.SetupStatus != SetupStatusFailed {
+		t.Fatalf("setup status = %q, want failed", updated.SetupStatus)
+	}
+}
 
 func TestHandleSlackEnvelopeDedupesConcurrentRetry(t *testing.T) {
 	tmp := t.TempDir()
