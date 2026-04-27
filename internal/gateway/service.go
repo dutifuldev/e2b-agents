@@ -116,7 +116,7 @@ func (s *Service) handleSlackEnvelope(ctx context.Context, envelope SlackEventEn
 		return nil
 	}
 
-	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionThreadRootTS(event))
+	reply, err := s.sendToRuntimeLocked(ctx, workspace, event.User, event.Channel, text, sessionConversationID(event))
 	if err != nil {
 		_ = s.workspaces.UpdateAfterMessage(ctx, workspace.ID, map[string]any{
 			"setup_status": SetupStatusFailed,
@@ -259,8 +259,8 @@ func (s *Service) lockWorkspace(workspaceID string) func() {
 	return lock.Unlock
 }
 
-func slackSessionKey(slackTeamID, channelID, threadRootTS string) string {
-	conversationID := firstNonEmpty(threadRootTS, "direct")
+func slackSessionKey(slackTeamID, channelID, conversationSurface string) string {
+	conversationID := firstNonEmpty(conversationSurface, "direct")
 	return fmt.Sprintf("slack:%s:%s:%s:%s", slackSessionKeyVersion, slackTeamID, channelID, conversationID)
 }
 
@@ -286,14 +286,22 @@ func replyThreadTS(event SlackEvent) string {
 	return ""
 }
 
-func sessionThreadRootTS(event SlackEvent) string {
-	if strings.TrimSpace(event.ThreadTS) != "" {
-		return event.ThreadTS
+func sessionConversationID(event SlackEvent) string {
+	if isDirectSlackConversation(event) {
+		return "direct"
 	}
-	if event.Type == "app_mention" {
-		return event.TS
+	if strings.TrimSpace(event.Channel) != "" {
+		return "channel"
 	}
 	return ""
+}
+
+func isDirectSlackConversation(event SlackEvent) bool {
+	switch strings.TrimSpace(event.ChannelType) {
+	case "im", "mpim":
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(event.Channel), "D")
 }
 
 func isBotMentionText(text, botUserID string) bool {
