@@ -14,15 +14,11 @@
 
 The gateway treats the sandbox as the agent instance and the E2B template as the agent image. Runtime-specific behavior stays inside templates and adapters.
 
-- **Slack gateway**: verifies Slack signatures, handles install callbacks and event delivery, and posts replies.
-- **E2B runtime lifecycle**: creates, reconnects, and refreshes sandboxes from configured templates.
-- **ACP adapter path**: runs a sandbox-local adapter that exposes the harness ACP session over HTTP to the Go service.
-- **Warm direct sends**: sends follow-up messages directly to the cached adapter endpoint when the workspace is ready.
-- **Session routing**: maps Slack channels, threads, and direct messages to separate ACP sessions.
-- **Workspace state**: stores the current sandbox, ACP session, template, Slack token reference, and setup status in Postgres.
-- **Duplicate delivery guard**: records processed Slack event IDs so repeated Slack deliveries do not create duplicate turns.
-- **Operational logs**: emits structured `slog` JSON with timing for runtime, Slack post, and database update stages.
-- **Development CLI**: includes commands for workspace setup, direct message testing, migrations, and Slack auth checks.
+- **Slack workspace routing**: maps Slack messages to the right sandbox runtime.
+- **E2B sandbox lifecycle**: creates, reconnects, and refreshes sandboxes from configured templates.
+- **ACP runtime messaging**: sends prompts to agent runtimes through the Agent Client Protocol.
+- **Conversation scoping**: keeps channel, thread, and direct-message sessions separate.
+- **Runtime recovery**: recreates or reconnects the sandbox when the current runtime expires or becomes unreachable.
 
 ## Message Flow
 
