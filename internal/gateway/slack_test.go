@@ -110,26 +110,29 @@ func TestShouldHandleSlackEvent(t *testing.T) {
 	}
 }
 
-func TestSlackSessionKeyScopesThreadRoot(t *testing.T) {
-	first := slackSessionKey("T123", "C123", "1777220000.000100")
-	second := slackSessionKey("T123", "C123", "1777220000.000200")
-	if first == second {
-		t.Fatal("expected different thread roots to produce different session keys")
+func TestSlackSessionKeyScopesConversationSurface(t *testing.T) {
+	first := slackSessionKey("T123", "C123", "channel")
+	second := slackSessionKey("T123", "C123", "channel")
+	if first != second {
+		t.Fatalf("slackSessionKey() mismatch: %q != %q", first, second)
 	}
 	if got := slackSessionKey("T123", "C123", ""); got != "slack:v1:T123:C123:direct" {
 		t.Fatalf("slackSessionKey() = %q, want direct fallback", got)
 	}
 }
 
-func TestSessionThreadRootTS(t *testing.T) {
-	if got := sessionThreadRootTS(SlackEvent{Type: "message", ChannelType: "im", TS: "1777220000.000100"}); got != "" {
-		t.Fatalf("sessionThreadRootTS() = %q, want empty direct fallback", got)
+func TestSessionConversationID(t *testing.T) {
+	if got := sessionConversationID(SlackEvent{Type: "message", ChannelType: "im", Channel: "D123", TS: "1777220000.000100"}); got != "direct" {
+		t.Fatalf("sessionConversationID() = %q, want direct", got)
 	}
-	if got := sessionThreadRootTS(SlackEvent{Type: "app_mention", TS: "1777220000.000100"}); got != "1777220000.000100" {
-		t.Fatalf("sessionThreadRootTS() = %q, want app mention timestamp", got)
+	if got := sessionConversationID(SlackEvent{Type: "message", Channel: "D123", TS: "1777220000.000100"}); got != "direct" {
+		t.Fatalf("sessionConversationID() = %q, want direct fallback", got)
 	}
-	if got := sessionThreadRootTS(SlackEvent{Type: "app_mention", TS: "1777220000.000100", ThreadTS: "1777220000.000000"}); got != "1777220000.000000" {
-		t.Fatalf("sessionThreadRootTS() = %q, want thread root timestamp", got)
+	if got := sessionConversationID(SlackEvent{Type: "app_mention", ChannelType: "channel", Channel: "C123", TS: "1777220000.000100"}); got != "channel" {
+		t.Fatalf("sessionConversationID() = %q, want channel", got)
+	}
+	if got := sessionConversationID(SlackEvent{Type: "app_mention", ChannelType: "channel", Channel: "C123", TS: "1777220000.000100", ThreadTS: "1777220000.000000"}); got != "channel" {
+		t.Fatalf("sessionConversationID() = %q, want channel for threaded message", got)
 	}
 }
 
