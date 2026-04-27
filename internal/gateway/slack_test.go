@@ -131,8 +131,8 @@ func TestSessionConversationID(t *testing.T) {
 	if got := sessionConversationID(SlackEvent{Type: "app_mention", ChannelType: "channel", Channel: "C123", TS: "1777220000.000100"}); got != "channel" {
 		t.Fatalf("sessionConversationID() = %q, want channel", got)
 	}
-	if got := sessionConversationID(SlackEvent{Type: "app_mention", ChannelType: "channel", Channel: "C123", TS: "1777220000.000100", ThreadTS: "1777220000.000000"}); got != "channel" {
-		t.Fatalf("sessionConversationID() = %q, want channel for threaded message", got)
+	if got := sessionConversationID(SlackEvent{Type: "app_mention", ChannelType: "channel", Channel: "C123", TS: "1777220000.000100", ThreadTS: " 1777220000.000000 "}); got != "1777220000.000000" {
+		t.Fatalf("sessionConversationID() = %q, want thread timestamp", got)
 	}
 }
 

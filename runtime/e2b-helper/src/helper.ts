@@ -1,11 +1,13 @@
 import { Sandbox } from "e2b";
 import { createHash } from "node:crypto";
+import { acpBridgeScript } from "./acpBridgeScript.js";
 
 type Envelope = {
-  command: "ensure" | "send";
+  command: "ensure";
   input: unknown;
   model: string;
   gatewayPort: number;
+  adapterPort: number;
   gatewayToken: string;
   sandboxTimeoutMs: number;
 };
@@ -19,12 +21,6 @@ type EnsureInput = {
   metadata?: Record<string, string>;
 };
 
-type SendInput = {
-  sandboxId: string;
-  prompt: string;
-  sessionKey: string;
-};
-
 const gatewayFingerprintPath = "/home/user/.openclaw/e2b-agents-gateway.sha256";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,11 +29,6 @@ async function main() {
   const envelope = JSON.parse(await readStdin()) as Envelope;
   if (envelope.command === "ensure") {
     const output = await ensureRuntime(envelope.input as EnsureInput, envelope);
-    writeJSON(output);
-    return;
-  }
-  if (envelope.command === "send") {
-    const output = await sendPrompt(envelope.input as SendInput, envelope);
     writeJSON(output);
     return;
   }
@@ -65,6 +56,7 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     created: runtime.created,
   });
   const host = runtime.sandbox.getHost(envelope.gatewayPort);
+  const acpHost = runtime.sandbox.getHost(adapterPort(envelope));
   logTiming("runtime helper ensure completed", {
     durationMs: durationMs(totalStart),
     sandboxId: runtime.sandbox.sandboxId,
@@ -76,106 +68,8 @@ async function ensureRuntime(input: EnsureInput, envelope: Envelope) {
     templateId: input.templateId,
     host,
     baseUrl: host.startsWith("http") ? host : `https://${host}`,
-    sessionKey: input.sessionKey,
-  };
-}
-
-async function sendPrompt(input: SendInput, envelope: Envelope) {
-  const totalStart = Date.now();
-  if (!input.sandboxId) throw new Error("sandboxId is required");
-  if (!input.sessionKey) throw new Error("sessionKey is required");
-  if (!input.prompt.trim()) throw new Error("prompt is required");
-
-  const connectStart = Date.now();
-  let sandbox: Sandbox;
-  try {
-    sandbox = await Sandbox.connect(input.sandboxId, {
-      apiKey: requiredEnv("E2B_API_KEY"),
-      requestTimeoutMs: 60_000,
-    });
-    logTiming("runtime helper sandbox connect completed", {
-      durationMs: durationMs(connectStart),
-      sandboxId: input.sandboxId,
-    });
-  } catch (error) {
-    logTiming("runtime helper sandbox connect failed", {
-      durationMs: durationMs(connectStart),
-      sandboxId: input.sandboxId,
-      error: errorMessage(error),
-    });
-    throw error;
-  }
-  const host = sandbox.getHost(envelope.gatewayPort);
-  const baseUrl = host.startsWith("http") ? host : `https://${host}`;
-  const fetchStart = Date.now();
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${envelope.gatewayToken}`,
-        "content-type": "application/json",
-        "x-openclaw-agent-id": "main",
-        "x-openclaw-session-key": input.sessionKey,
-      },
-      body: JSON.stringify({
-        model: "openclaw:main",
-        user: input.sessionKey,
-        messages: [
-          {
-            role: "system",
-            content: runtimeSystemPrompt(),
-          },
-          {
-            role: "user",
-            content: input.prompt,
-          },
-        ],
-      }),
-    });
-    logTiming("runtime helper gateway fetch completed", {
-      durationMs: durationMs(fetchStart),
-      sandboxId: input.sandboxId,
-      sessionKey: input.sessionKey,
-      status: response.status,
-    });
-  } catch (error) {
-    logTiming("runtime helper gateway fetch failed", {
-      durationMs: durationMs(fetchStart),
-      sandboxId: input.sandboxId,
-      sessionKey: input.sessionKey,
-      error: errorMessage(error),
-    });
-    throw error;
-  }
-  const bodyStart = Date.now();
-  const bodyText = await response.text();
-  logTiming("runtime helper gateway body read completed", {
-    durationMs: durationMs(bodyStart),
-    sandboxId: input.sandboxId,
-    sessionKey: input.sessionKey,
-    status: response.status,
-    responseBytes: Buffer.byteLength(bodyText),
-  });
-  if (!response.ok) {
-    throw new Error(`runtime HTTP ${response.status}: ${bodyText.slice(0, 500)}`);
-  }
-  const body = JSON.parse(bodyText) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    output_text?: string;
-  };
-  const text = body.choices?.[0]?.message?.content ?? body.output_text ?? "";
-  if (!text.trim()) {
-    throw new Error("runtime returned an empty reply");
-  }
-  logTiming("runtime helper send completed", {
-    durationMs: durationMs(totalStart),
-    sandboxId: input.sandboxId,
-    sessionKey: input.sessionKey,
-    replyBytes: Buffer.byteLength(text),
-  });
-  return {
-    text: normalizeText(text),
+    acpHost,
+    acpBaseUrl: acpHost.startsWith("http") ? acpHost : `https://${acpHost}`,
     sessionKey: input.sessionKey,
   };
 }
@@ -241,10 +135,11 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
     ...baseEnvs,
     OPENCLAW_GATEWAY_TOKEN: envelope.gatewayToken,
   };
-  await sandbox.commands.run(`mkdir -p /home/user/.openclaw/agents/main/agent /home/user/.openclaw/workspace`, {
+  await sandbox.commands.run(`mkdir -p /home/user/.openclaw/agents/main/agent /home/user/.openclaw/workspace /home/user/.e2b-agents`, {
     requestTimeoutMs: 60_000,
     envs: baseEnvs,
   });
+  await sandbox.files.write("/home/user/.openclaw/gateway.token", `${envelope.gatewayToken}\n`);
   await sandbox.files.write(
     "/home/user/.openclaw/agents/main/agent/models.json",
     JSON.stringify(
@@ -294,12 +189,13 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
 
   const fingerprint = gatewayFingerprint(envelope, baseEnvs);
   const readyBeforeStart = await isGatewayReady(sandbox, envelope, baseEnvs);
+  const acpReadyBeforeStart = await isACPAdapterReady(sandbox, envelope, baseEnvs);
   const currentFingerprint = await readGatewayFingerprint(sandbox, baseEnvs);
-  if (readyBeforeStart && currentFingerprint === fingerprint) return;
+  if (readyBeforeStart && acpReadyBeforeStart && currentFingerprint === fingerprint) return;
 
   await sandbox.commands.run(
     `bash -lc ${shellQuote(
-      `for p in "[o]penclaw gateway" "[o]penclaw-gateway"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
+      `for p in "[o]penclaw gateway" "[o]penclaw-gateway" "[a]cp-adapter.mjs"; do for pid in $(pgrep -f "$p" || true); do kill "$pid" >/dev/null 2>&1 || true; done; done`,
     )}`,
     { requestTimeoutMs: 60_000, envs: baseEnvs },
   );
@@ -310,12 +206,48 @@ async function configureGateway(sandbox: Sandbox, envelope: Envelope) {
   );
   for (let i = 0; i < 60; i++) {
     if (await isGatewayReady(sandbox, envelope, baseEnvs)) {
-      await sandbox.files.write(gatewayFingerprintPath, `${fingerprint}\n`);
+      break;
+    }
+    await sleep(1000);
+  }
+  if (!(await isGatewayReady(sandbox, envelope, baseEnvs))) {
+    throw new Error("runtime gateway did not become ready");
+  }
+
+  await configureACPAdapter(sandbox, envelope, baseEnvs);
+  await sandbox.files.write(gatewayFingerprintPath, `${fingerprint}\n`);
+}
+
+async function configureACPAdapter(sandbox: Sandbox, envelope: Envelope, baseEnvs: Record<string, string>) {
+  await sandbox.files.write("/home/user/.e2b-agents/acp-adapter.mjs", acpBridgeScript());
+  const acpCommand = [
+    "openclaw",
+    "acp",
+    "--url",
+    `ws://127.0.0.1:${envelope.gatewayPort}`,
+    "--token-file",
+    "/home/user/.openclaw/gateway.token",
+    "--no-prefix-cwd",
+  ];
+  const adapterEnvs = {
+    ...baseEnvs,
+    E2B_AGENTS_ACP_ADAPTER_PORT: String(adapterPort(envelope)),
+    E2B_AGENTS_ACP_AUTH_TOKEN: envelope.gatewayToken,
+    E2B_AGENTS_ACP_CWD: "/home/user/.openclaw/workspace",
+    E2B_AGENTS_ACP_COMMAND_JSON: JSON.stringify(acpCommand),
+  };
+  await sandbox.commands.run(`node /home/user/.e2b-agents/acp-adapter.mjs`, {
+    background: true,
+    requestTimeoutMs: 60_000,
+    envs: adapterEnvs,
+  });
+  for (let i = 0; i < 60; i++) {
+    if (await isACPAdapterReady(sandbox, envelope, baseEnvs)) {
       return;
     }
     await sleep(1000);
   }
-  throw new Error("runtime gateway did not become ready");
+  throw new Error("runtime ACP adapter did not become ready");
 }
 
 async function readGatewayFingerprint(sandbox: Sandbox, envs: Record<string, string>) {
@@ -331,11 +263,17 @@ function gatewayFingerprint(envelope: Envelope, envs: Record<string, string>) {
     .update(JSON.stringify({
       model: envelope.model,
       gatewayPort: envelope.gatewayPort,
+      adapterPort: adapterPort(envelope),
       gatewayToken: envelope.gatewayToken,
       anthropicKeyHash: createHash("sha256").update(envs.ANTHROPIC_API_KEY ?? "").digest("hex"),
-      version: 2,
+      adapterScriptHash: createHash("sha256").update(acpBridgeScript()).digest("hex"),
+      version: 3,
     }))
     .digest("hex");
+}
+
+function adapterPort(envelope: Envelope) {
+  return envelope.adapterPort > 0 ? envelope.adapterPort : envelope.gatewayPort + 1;
 }
 
 async function isGatewayReady(sandbox: Sandbox, envelope: Envelope, envs: Record<string, string>) {
@@ -346,24 +284,17 @@ async function isGatewayReady(sandbox: Sandbox, envelope: Envelope, envs: Record
   return probe.stdout.trim() === "ready";
 }
 
-function normalizeText(text: string) {
-  return text
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/g, ""))
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function runtimeSystemPrompt() {
-  return [
-    "You are E2B OpenClaw, an agent runtime inside an E2B sandbox managed by e2b-agents.",
-    "The current conversation is arriving through the e2b-agents Slack gateway.",
-    "When asked what channel or gateway is being tested, answer Slack or Slack gateway, never webchat.",
-    "Keep replies concise and accurate. Use Slack-safe formatting with no decorative emoji, no malformed Markdown, and no repeated blank lines.",
-    "Use bullets only when the user asks for a list or checklist.",
-  ].join("\n");
+async function isACPAdapterReady(sandbox: Sandbox, envelope: Envelope, envs: Record<string, string>) {
+  const url = `http://127.0.0.1:${adapterPort(envelope)}/healthz?ready=1`;
+  try {
+    const probe = await sandbox.commands.run(
+      `bash -lc ${shellQuote(`curl --max-time 15 -fsS -H ${shellQuote(`Authorization: Bearer ${envelope.gatewayToken}`)} ${shellQuote(url)} >/dev/null && echo ready || echo waiting`)}`,
+      { requestTimeoutMs: 20_000, envs },
+    );
+    return probe.stdout.trim() === "ready";
+  } catch {
+    return false;
+  }
 }
 
 function identityMarkdown() {

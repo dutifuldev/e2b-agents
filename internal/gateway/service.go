@@ -380,7 +380,9 @@ func isRuntimeUnavailableError(err error) bool {
 		"no such host",
 		"fetch failed",
 		"gateway not reachable",
+		"runtime adapter endpoint not cached",
 		"runtime gateway did not become ready",
+		"runtime acp adapter did not become ready",
 		"connect timeout",
 		"connect timed out",
 		"i/o timeout",
@@ -393,7 +395,8 @@ func isRuntimeUnavailableError(err error) bool {
 			return true
 		}
 	}
-	if strings.Contains(msg, "runtime http 502") || strings.Contains(msg, "runtime http 503") {
+	if strings.Contains(msg, "runtime http 502") || strings.Contains(msg, "runtime http 503") ||
+		strings.Contains(msg, "runtime adapter http 502") || strings.Contains(msg, "runtime adapter http 503") {
 		return true
 	}
 	if strings.Contains(msg, "sandbox") && (strings.Contains(msg, "404") || strings.Contains(msg, "410")) {
@@ -445,6 +448,9 @@ func replyThreadTS(event SlackEvent) string {
 func sessionConversationID(event SlackEvent) string {
 	if isDirectSlackConversation(event) {
 		return "direct"
+	}
+	if strings.TrimSpace(event.ThreadTS) != "" {
+		return strings.TrimSpace(event.ThreadTS)
 	}
 	if strings.TrimSpace(event.Channel) != "" {
 		return "channel"
