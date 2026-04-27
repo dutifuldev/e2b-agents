@@ -407,6 +407,9 @@ func TestHandleSlackEnvelopeForcesRecoveryWhenSendAfterEnsureIsUnavailable(t *te
 	if !runtime.ensureCalls[1].ForceRestart {
 		t.Fatal("second Ensure did not force restart")
 	}
+	if runtime.ensureCalls[1].SandboxID != "sandbox-recovered" {
+		t.Fatalf("second Ensure sandbox = %q, want sandbox-recovered", runtime.ensureCalls[1].SandboxID)
+	}
 	if len(runtime.sendCalls) != 2 {
 		t.Fatalf("Send calls = %d, want 2", len(runtime.sendCalls))
 	}

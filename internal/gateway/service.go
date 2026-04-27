@@ -435,6 +435,7 @@ func (s *Service) sendToRuntimeLocked(ctx context.Context, workspace database.Sl
 			"duration_ms", time.Since(sendStart).Milliseconds(),
 			"error", err,
 		)
+		ensureInput.SandboxID = ensure.SandboxID
 		ensureInput.ForceRestart = true
 		recoveryStart := time.Now()
 		ensure, err = s.runtime.Ensure(ctx, ensureInput)
